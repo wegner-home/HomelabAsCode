@@ -18,7 +18,7 @@ decrypt:
 	@echo "Decryption complete. Decrypted file: secrets/secrets.decrypted.yaml"
 
 all:
-	stage-0 stage-1 stage-2 stage-3 stage-4 stage-5 stage-6 stage-7
+	init stage-0 stage-1 stage-2 stage-3 stage-4 stage-5 stage-6 stage-7
 
 stage-0:
 	@AGE_KEY_FILE=secrets/sops/keys.txt
