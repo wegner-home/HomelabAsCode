@@ -1,0 +1,47 @@
+---
+# helpers/cleanup_known_hosts.yml
+# ============================================================
+# Remove stale SSH known_hosts entries for a group of hosts.
+#
+# When VMs are rebuilt/reprovisioned they get new SSH host keys.
+# Stale entries in known_hosts cause SSH to reject connections,
+# even with host_key_checking=False. This helper removes them
+# using only inventory-defined variables (no remote facts needed).
+#
+# Required variable:
+#   _cleanup_hosts: list of inventory hostnames to clean
+#                   Example: groups['gitlab_vms'] | default([])
+#                   Example: groups['nixos_vms'] | default([]) | difference(groups['gitlab_vms'] | default([]))
+#
+# Usage (as a full play in a playbook):
+#   - name: Cleanup stale SSH known_hosts
+#     hosts: localhost
+#     gather_facts: false
+#     tasks:
+#       - name: Cleanup known_hosts for target hosts
+#         ansible.builtin.include_tasks:
+#           file: '{{ playbook_dir }}/helpers/cleanup_known_hosts.yml'
+#         vars:
+#           _cleanup_hosts: "{{ groups['gitlab_vms'] | default([]) }}"
+
+- name: Build list of hostnames and IPs to remove
+  ansible.builtin.set_fact:
+    _cleanup_entries: >-
+      {%- set entries = [] -%}
+      {%- for host in _cleanup_hosts -%}
+        {%- set _ = entries.append(host) -%}
+        {%- if hostvars[host]['ansible_host'] is defined -%}
+          {%- set _ = entries.append(hostvars[host]['ansible_host']) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ entries }}
+
+- name: Remove stale SSH host keys from known_hosts
+  ansible.builtin.known_hosts:
+    name: '{{ item }}'
+    state: absent
+  loop: '{{ _cleanup_entries }}'
+  loop_control:
+    label: '{{ item }}'
+  failed_when: false
+  changed_when: false

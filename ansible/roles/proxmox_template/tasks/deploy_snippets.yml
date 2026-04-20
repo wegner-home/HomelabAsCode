@@ -1,0 +1,23 @@
+---
+# Deploy cloud-init snippets to Proxmox node
+
+- name: Ensure snippets directory exists
+  ansible.builtin.file:
+    path: '{{ proxmox_template_snippet_dir }}'
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Deploy template cloud-init user-data snippet
+  ansible.builtin.template:
+    src: '{{ proxmox_template_userdata_template }}'
+    dest: '{{ proxmox_template_snippet_dir }}/{{ proxmox_template_name }}-cloud-config.yml'
+    mode: '0644'
+  become: true
+  register: snippet_deployed
+
+- name: Display snippet deployment result
+  ansible.builtin.debug:
+    msg:
+      - 'Cloud-init snippet deployed'
+      - 'Path: {{ proxmox_template_snippet_dir }}/{{ proxmox_template_name }}-cloud-config.yml'

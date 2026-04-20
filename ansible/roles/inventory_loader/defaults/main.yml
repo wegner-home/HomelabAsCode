@@ -1,0 +1,40 @@
+---
+# defaults file for inventory_loader role
+# Loads and categorizes all VM definitions from inventory host_vars
+#
+# NOTE: Variable names retain the inventory_builder_ prefix for backward
+# compatibility during the role split. These will be renamed in a future pass.
+
+# ===============================================
+# Environment
+# ===============================================
+# Environment name for inventory path construction
+# Reads from NIX_ENV env var, falls back to "dev"
+inventory_builder_env: '{{ lookup("env", "NIX_ENV") | default("dev", true) }}'
+
+# ===============================================
+# Project Settings (for output directory creation)
+# ===============================================
+inventory_builder_repo_root: >-
+  {{ (global_iac_root | default(playbook_dir ~ '/..', true))
+     | regex_replace('/+$', '')
+     | regex_replace('/ansible$', '') }}
+inventory_builder_project_dir: "{{ global_iac_terraform_dir if (global_iac_terraform_dir is defined and (global_iac_terraform_dir | trim) != '' and (global_iac_terraform_dir | trim) != '/terraform') else (inventory_builder_repo_root ~ '/terraform') }}"
+inventory_builder_project_owner: '{{ (ansible_facts | default({})).get("env", {}).get("USER", lookup("env", "USER")) }}'
+inventory_builder_project_group: 'users'
+
+# NixOS Flakes output directory (created here, populated by downstream roles)
+inventory_builder_flakes_dir: '{{ inventory_builder_repo_root }}/repos/nix-vms'
+
+# ===============================================
+# SSH Key Configuration for Cloud-Init
+# ===============================================
+# Base SSH directory (matches bootstrap_localhost)
+inventory_builder_ssh_base_dir: "{{ global_ssh_base_dir | default('/var/local/' ~ project_name ~ '/ssh') }}"
+
+# Service user SSH key path (created by ssh_user in stage_0)
+inventory_builder_service_user_ssh_dir: "{{ inventory_builder_ssh_base_dir }}/users/{{ global_service_user | default('ansible') }}"
+inventory_builder_service_user_ssh_pubkey: '{{ inventory_builder_service_user_ssh_dir }}/id_ed25519.pub'
+
+# Whether to automatically include service user SSH key in cloud-init
+inventory_builder_include_service_user_ssh_key: true

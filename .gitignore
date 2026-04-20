@@ -1,0 +1,23 @@
+# sops keys
+**/keys.txt
+
+# IDE
+.vscode/
+.github/
+
+# Ansible
+*.retry
+.ansible/
+
+
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+project-plan.md
+
+.outputs/

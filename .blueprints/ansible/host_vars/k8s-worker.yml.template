@@ -1,0 +1,32 @@
+---
+# Example host_vars for a Talos control plane node.
+# Used by Stage 2 template generation to build:
+#   - terraform/talos-vms.auto.tfvars
+#   - terraform/talos-nodes.auto.tf
+#   - terraform/talos-providers.auto.tf
+
+global_vm_definitions:
+  k8s-worker-01:
+    # Required for Talos node classification in tf_inventory_loader
+    role: "worker"
+
+    # Required node identity/network for generated Talos VM resources
+    ip_address: "10.90.10.100"
+    mac_address: "BC:24:11:90:01:01"
+
+    # Optional overrides 
+    target_node: "pve04"
+    cores: 2
+    memory: 8192
+    disk_size: "50G"
+    disk_storage: "local-lvm"
+    bridge: "vmbr0"
+    iso_file: "local:iso/talos-amd64.iso"
+
+    # Informational metadata
+    description: "Talos worker node 01"
+    tags:
+      - talos
+      - kubernetes
+      - worker
+host_role: "talos-worker"

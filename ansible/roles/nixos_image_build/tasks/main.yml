@@ -1,0 +1,137 @@
+---
+# Build NixOS image using nixos-generator
+
+- name: Check if running on NixOS or has Nix installed
+  ansible.builtin.command: nix --version
+  register: nix_check
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+
+- name: Fail if Nix is not available
+  ansible.builtin.fail:
+    msg: |
+      Nix is not installed on localhost. Please install Nix:
+      https://nixos.org/download.html
+
+      Quick install: curl -L https://nixos.org/nix/install | sh
+  when: nix_check.rc != 0
+  delegate_to: localhost
+
+- name: Check if nixos-generator is installed
+  ansible.builtin.command: nixos-generate --version
+  register: generator_check
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+
+- name: Install nixos-generator
+  ansible.builtin.command: >
+    nix profile install nixpkgs#nixos-generators
+  when:
+    - generator_check.rc != 0
+    - proxmox_template_nixos_install_generator | bool
+  register: generator_install
+  changed_when: generator_install.rc == 0
+  delegate_to: localhost
+
+- name: Ensure build directory exists
+  ansible.builtin.file:
+    path: '{{ proxmox_template_nixos_build_dir }}'
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+- name: Check if image already exists
+  ansible.builtin.find:
+    paths: '{{ proxmox_template_nixos_build_dir }}'
+    patterns: 'nixos-{{ proxmox_template_nixos_version }}.*'
+  register: existing_image
+  delegate_to: localhost
+
+- name: Skip build if image exists and not forcing rebuild
+  ansible.builtin.debug:
+    msg: 'Image already exists, skipping build. Use proxmox_template_force_rebuild=true to rebuild.'
+  when:
+    - existing_image.files | length > 0
+    - not proxmox_template_force_rebuild | bool
+  delegate_to: localhost
+
+- name: Build NixOS image
+  when: existing_image.files | length == 0 or proxmox_template_force_rebuild | bool
+  block:
+    - name: Generate configuration.nix
+      ansible.builtin.template:
+        src: '{{ proxmox_template_nixos_config_file }}'
+        dest: '{{ proxmox_template_nixos_build_dir }}/configuration.nix'
+        mode: '0644'
+      register: config_generated
+      delegate_to: localhost
+
+    - name: Display configuration location
+      ansible.builtin.debug:
+        msg: 'Configuration: {{ proxmox_template_nixos_build_dir }}/configuration.nix'
+
+    - name: Build image with nixos-generator
+      ansible.builtin.command: >
+        nixos-generate
+        --format {{ proxmox_template_nixos_generator_format }}
+        --configuration {{ proxmox_template_nixos_build_dir }}/configuration.nix
+        --out-link {{ proxmox_template_nixos_build_dir }}/result
+        -I nixpkgs=channel:{{ proxmox_template_nixos_nixpkgs }}
+        {{ proxmox_template_nixos_generator_extra_args }}
+      args:
+        chdir: '{{ proxmox_template_nixos_build_dir }}'
+      register: build_result
+      changed_when: true
+      delegate_to: localhost
+
+    - name: Find built image
+      ansible.builtin.find:
+        paths: '{{ proxmox_template_nixos_build_dir }}/result'
+        patterns:
+          - '*.qcow2'
+          - '*.raw'
+          - '*.vdi'
+          - '*.vma'
+          - '*.vma.zst'
+          - '*.vma.gz'
+        recurse: yes
+        follow: yes
+      register: built_images
+      delegate_to: localhost
+
+    - name: Fail if no image was built
+      ansible.builtin.fail:
+        msg: 'No image found after build. Check nixos-generate output.'
+      when: built_images.files | length == 0
+
+    - name: Determine image extension (handle multi-part like .vma.zst)
+      ansible.builtin.set_fact:
+        built_image_ext: >-
+          {%- set basename = built_images.files[0].path | basename -%}
+          {%- if basename.endswith('.vma.zst') -%}vma.zst
+          {%- elif basename.endswith('.vma.gz') -%}vma.gz
+          {%- elif basename.endswith('.tar.gz') -%}tar.gz
+          {%- else -%}{{ basename.split('.')[-1] }}{%- endif -%}
+      delegate_to: localhost
+
+    - name: Copy built image to standard location
+      ansible.builtin.copy:
+        src: '{{ built_images.files[0].path }}'
+        dest: '{{ proxmox_template_nixos_build_dir }}/nixos-{{ proxmox_template_nixos_version }}.{{ built_image_ext }}'
+        mode: '0644'
+        remote_src: true
+      delegate_to: localhost
+
+    - name: Set image path fact for transfer
+      ansible.builtin.set_fact:
+        proxmox_template_local_image_path: '{{ proxmox_template_nixos_build_dir }}/nixos-{{ proxmox_template_nixos_version }}.{{ built_image_ext }}'
+        proxmox_template_image_is_vma: "{{ 'vma' in built_image_ext }}"
+
+    - name: Display build result
+      ansible.builtin.debug:
+        msg:
+          - 'NixOS image built successfully'
+          - "Image: {{ proxmox_template_nixos_build_dir }}/nixos-{{ proxmox_template_nixos_version }}.{{ built_images.files[0].path | regex_replace('.*\\.', '') }}"
+          - 'Size: {{ (built_images.files[0].size / 1024 / 1024) | round(2) }} MB'

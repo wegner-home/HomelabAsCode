@@ -1,0 +1,45 @@
+---
+# defaults file for ssh_ca role
+# SSH Certificate Authority for NixOS {{ project_name }}
+
+# ==============================================
+# SSH CA Configuration
+# ==============================================
+
+# Enable SSH CA (typically only on admin/jumphost)
+ssh_ca_enable: '{{ host_ssh_ca_enable | default(false) }}'
+
+# Directory to store CA keys and scripts
+ssh_ca_dir: '/var/lib/{{ project_name }}/ssh_ca'
+
+# CA key settings
+ssh_ca_key_name: '{{ project_name }}_ca'
+ssh_ca_key_type: 'ed25519'
+ssh_ca_key_bits: 4096
+
+# CA key validity (for documentation purposes)
+ssh_ca_validity_days: 3650 # 10 years for CA
+
+# ==============================================
+# Certificate Issuance Settings
+# ==============================================
+
+# User certificate validity period
+ssh_ca_user_cert_validity: '+52w' # 1 year
+
+# Host certificate validity period
+ssh_ca_host_cert_validity: '+104w' # 2 years
+
+# ==============================================
+# Host Identity
+# ==============================================
+ssh_ca_hostname: '{{ inventory_hostname_short }}'
+ssh_ca_domain: '{{ global_domain }}'
+ssh_ca_fqdn: '{{ ssh_ca_hostname }}.{{ ssh_ca_domain }}'
+
+# ==============================================
+# Backup Settings
+# ==============================================
+
+# Backup CA key when regenerating
+ssh_ca_backup_on_regenerate: true

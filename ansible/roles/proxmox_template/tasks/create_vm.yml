@@ -1,0 +1,285 @@
+---
+# Create Proxmox VM from image
+
+- name: Check if VM already exists
+  ansible.builtin.command: qm status {{ proxmox_template_vm_id }}
+  register: vm_exists
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Stop and destroy existing VM if forcing rebuild
+  when:
+    - vm_exists.rc == 0
+    - proxmox_template_force_rebuild | bool
+  become: true
+  block:
+    - name: Stop VM if running
+      ansible.builtin.command: qm stop {{ proxmox_template_vm_id }}
+      register: vm_stop
+      failed_when: false
+      changed_when: vm_stop.rc == 0
+
+    - name: Destroy existing VM
+      ansible.builtin.command: qm destroy {{ proxmox_template_vm_id }} --purge
+      changed_when: true
+
+- name: Clean up old image files when forcing rebuild
+  when: proxmox_template_force_rebuild | bool
+  become: true
+  block:
+    - name: Remove old remote image file
+      ansible.builtin.file:
+        path: '{{ proxmox_template_remote_image_path }}'
+        state: absent
+      when: proxmox_template_remote_image_path is defined
+
+    - name: Remove old decompressed VMA file
+      ansible.builtin.file:
+        path: "{{ proxmox_template_remote_image_path | regex_replace('\\.zst$', '') }}"
+        state: absent
+      when:
+        - proxmox_template_remote_image_path is defined
+        - proxmox_template_remote_image_path.endswith('.zst')
+
+    - name: Remove old VMA extract directory
+      ansible.builtin.file:
+        path: '{{ proxmox_template_tmp_dir }}/vma-extract-{{ proxmox_template_vm_id }}'
+        state: absent
+
+- name: Create new VM
+  when: vm_exists.rc != 0 or proxmox_template_force_rebuild | bool
+  become: true
+  block:
+    - name: Detect image format using file command
+      ansible.builtin.command: file {{ proxmox_template_remote_image_path }}
+      register: file_type
+      changed_when: false
+
+    - name: Display detected format
+      ansible.builtin.debug:
+        msg: 'Detected format: {{ file_type.stdout }}'
+
+    - name: Determine actual image format from filename
+      ansible.builtin.set_fact:
+        is_vma_format: "{{ 'vma' in proxmox_template_remote_image_path or 'VMA' in file_type.stdout }}"
+        is_zst_compressed: "{{ proxmox_template_remote_image_path.endswith('.zst') }}"
+
+    - name: Decompress zstd-compressed VMA file
+      ansible.builtin.command: zstd -d -f {{ proxmox_template_remote_image_path }}
+      when:
+        - is_vma_format | bool
+        - is_zst_compressed | bool
+      changed_when: true
+
+    - name: Set decompressed VMA path
+      ansible.builtin.set_fact:
+        vma_restore_path: "{{ proxmox_template_remote_image_path | regex_replace('\\.zst$', '') if is_zst_compressed else proxmox_template_remote_image_path }}"
+      when: is_vma_format | bool
+
+    # nixos-generators VMA files contain non-standard keys that qmrestore can't parse
+    # Instead: extract the raw disk from VMA and import it manually
+    - name: Extract raw disk from VMA (nixos-generators workaround)
+      ansible.builtin.command: >
+        vma extract {{ vma_restore_path }} {{ proxmox_template_tmp_dir }}/vma-extract-{{ proxmox_template_vm_id }}
+      when: is_vma_format | bool
+      changed_when: true
+
+    - name: Find extracted disk file
+      ansible.builtin.find:
+        paths: '{{ proxmox_template_tmp_dir }}/vma-extract-{{ proxmox_template_vm_id }}'
+        patterns: 'disk-*.raw'
+      register: extracted_disk
+      when: is_vma_format | bool
+
+    - name: Fail if no disk found in VMA
+      ansible.builtin.fail:
+        msg: 'No disk found in extracted VMA at {{ proxmox_template_tmp_dir }}/vma-extract-{{ proxmox_template_vm_id }}'
+      when:
+        - is_vma_format | bool
+        - extracted_disk.files | length == 0
+
+    - name: Create VM for VMA-sourced image
+      ansible.builtin.command: >
+        qm create {{ proxmox_template_vm_id }}
+        --name {{ proxmox_template_name }}
+        --description "{{ proxmox_template_description }}"
+        --ostype l26
+        --cores {{ proxmox_template_cores }}
+        --sockets {{ proxmox_template_sockets | default(1) }}
+        --memory {{ proxmox_template_memory }}
+        --net0 {{ proxmox_template_network_model }},bridge={{ proxmox_template_bridge }}{% if not proxmox_template_firewall %},firewall=0{% endif %}
+        --bios {{ proxmox_template_bios }}
+        --scsihw {{ proxmox_template_scsi_controller }}
+        {% if proxmox_template_qemu_agent %}--agent enabled=1{% endif %}
+      when: is_vma_format | bool
+      changed_when: true
+
+    - name: Import extracted raw disk
+      ansible.builtin.command: >
+        qm importdisk {{ proxmox_template_vm_id }}
+        {{ extracted_disk.files[0].path }}
+        {{ proxmox_template_storage }}
+        --format raw
+      when: is_vma_format | bool
+      changed_when: true
+
+    - name: Attach disk and set boot order (VMA)
+      ansible.builtin.command: >
+        qm set {{ proxmox_template_vm_id }}
+        --{{ proxmox_template_disk_interface }} {{ proxmox_template_storage }}:vm-{{ proxmox_template_vm_id }}-disk-0,discard=on
+        --boot order={{ proxmox_template_disk_interface }}
+        --bootdisk {{ proxmox_template_disk_interface }}
+      when: is_vma_format | bool
+      changed_when: true
+
+    - name: Clean up extracted VMA files
+      ansible.builtin.file:
+        path: '{{ proxmox_template_tmp_dir }}/vma-extract-{{ proxmox_template_vm_id }}'
+        state: absent
+      when:
+        - is_vma_format | bool
+        - proxmox_template_cleanup | bool
+
+    - name: Create VM for non-VMA images
+      ansible.builtin.command: >
+        qm create {{ proxmox_template_vm_id }}
+        --name {{ proxmox_template_name }}
+        --description "{{ proxmox_template_description }}"
+        --ostype l26
+        --cores {{ proxmox_template_cores }}
+        --sockets {{ proxmox_template_sockets | default(1) }}
+        --memory {{ proxmox_template_memory }}
+        --net0 {{ proxmox_template_network_model }},bridge={{ proxmox_template_bridge }}{% if not proxmox_template_firewall %},firewall=0{% endif %}
+        --bios {{ proxmox_template_bios }}
+        --scsihw {{ proxmox_template_scsi_controller }}
+        {% if proxmox_template_qemu_agent %}--agent enabled=1{% endif %}
+      register: vm_create
+      changed_when: true
+      when: not is_vma_format | bool
+
+    - name: Import qcow2/raw/img disk image
+      ansible.builtin.command: >
+        qm importdisk {{ proxmox_template_vm_id }}
+        {{ proxmox_template_remote_image_path }}
+        {{ proxmox_template_storage }}
+        --format {{ proxmox_template_disk_format }}
+      register: disk_import_std
+      changed_when: true
+      when: not is_vma_format | bool
+
+    - name: Debug disk import output
+      ansible.builtin.debug:
+        msg: 'Disk import output: {{ disk_import_std.stdout }}'
+      when: not is_vma_format | bool
+
+    - name: Extract disk name from import output
+      ansible.builtin.set_fact:
+        # The import output contains: "Successfully imported disk as 'unused0:local-lvm:vm-9000-disk-0'"
+        # We need to extract the storage:disk-name part for attachment
+        imported_disk_raw: "{{ disk_import_std.stdout | regex_search(\"unused\\d+:([^']+)\", '\\1') | default([proxmox_template_storage ~ ':vm-' ~ proxmox_template_vm_id ~ '-disk-0']) | first }}"
+      when: not is_vma_format | bool
+
+    - name: Set imported disk identifier
+      ansible.builtin.set_fact:
+        imported_disk: '{{ proxmox_template_storage }}:vm-{{ proxmox_template_vm_id }}-disk-0'
+      when: not is_vma_format | bool
+
+    - name: Debug imported disk identifier
+      ansible.builtin.debug:
+        msg: 'Will attach disk: {{ imported_disk }} to {{ proxmox_template_disk_interface }}'
+      when: not is_vma_format | bool
+
+    - name: Attach imported disk to VM as boot disk
+      ansible.builtin.command: >
+        qm set {{ proxmox_template_vm_id }}
+        --{{ proxmox_template_disk_interface }} {{ imported_disk }},discard=on
+      changed_when: true
+      when: not is_vma_format | bool
+
+    - name: Resize disk to desired size
+      ansible.builtin.command: >
+        qm disk resize {{ proxmox_template_vm_id }}
+        {{ proxmox_template_disk_interface }}
+        {{ proxmox_template_disk_size }}G
+      when:
+        - proxmox_template_disk_size | int > 0
+      changed_when: true
+
+    - name: Add cloud-init drive on ide2
+      ansible.builtin.command: >
+        qm set {{ proxmox_template_vm_id }}
+        --{{ proxmox_template_cloudinit_interface }} {{ proxmox_template_cloudinit_storage }}:cloudinit
+      register: cloudinit_result
+      when: proxmox_template_cloudinit_enable | bool
+      changed_when: true
+
+    - name: Debug cloud-init drive result
+      ansible.builtin.debug:
+        msg: 'Cloud-init drive added: {{ cloudinit_result }}'
+      when: proxmox_template_cloudinit_enable | bool
+
+    - name: Set boot order and bootdisk
+      ansible.builtin.command: >
+        qm set {{ proxmox_template_vm_id }}
+        --boot {{ proxmox_template_boot_order }}
+        --bootdisk {{ proxmox_template_bootdisk | default(proxmox_template_disk_interface) }}
+      changed_when: true
+
+    - name: Enable serial console
+      ansible.builtin.command: >
+        qm set {{ proxmox_template_vm_id }}
+        --serial0 socket
+        --vga serial0
+      when: proxmox_template_serial_console | bool
+      changed_when: true
+
+    - name: Configure cloud-init custom snippet
+      ansible.builtin.command: >
+        qm set {{ proxmox_template_vm_id }}
+        --cicustom "user=local:snippets/{{ proxmox_template_name }}-cloud-config.yml"
+      when: proxmox_template_deploy_snippet | bool
+      changed_when: true
+
+    - name: Verify boot configuration
+      ansible.builtin.command: qm config {{ proxmox_template_vm_id }}
+      register: vm_config
+      changed_when: false
+
+    - name: Parse and verify boot settings
+      ansible.builtin.set_fact:
+        config_has_bootdisk: "{{ 'bootdisk:' in vm_config.stdout }}"
+        config_has_boot: "{{ 'boot:' in vm_config.stdout }}"
+        config_has_disk: "{{ proxmox_template_disk_interface ~ ':' in vm_config.stdout }}"
+
+    - name: Display VM configuration for verification
+      ansible.builtin.debug:
+        msg:
+          - '=== VM Configuration ==='
+          - '{{ vm_config.stdout_lines }}'
+          - ''
+          - '=== Boot Verification ==='
+          - 'Has bootdisk setting: {{ config_has_bootdisk }}'
+          - 'Has boot order setting: {{ config_has_boot }}'
+          - 'Has disk on {{ proxmox_template_disk_interface }}: {{ config_has_disk }}'
+
+    - name: Warn if boot configuration looks incorrect
+      ansible.builtin.debug:
+        msg: |
+          WARNING: Boot configuration may be incomplete!
+          - bootdisk present: {{ config_has_bootdisk }}
+          - boot order present: {{ config_has_boot }}
+          - disk attached: {{ config_has_disk }}
+
+          This may cause 'no bootable device' errors on cloned VMs.
+      when: not (config_has_bootdisk and config_has_boot and config_has_disk)
+
+    - name: Display VM creation result
+      ansible.builtin.debug:
+        msg:
+          - 'VM created successfully'
+          - 'VM ID: {{ proxmox_template_vm_id }}'
+          - 'Name: {{ proxmox_template_name }}'
+          - 'Boot disk: {{ proxmox_template_bootdisk | default(proxmox_template_disk_interface) }}'
+          - 'Boot order: {{ proxmox_template_boot_order }}'
+          - 'Ready to convert to template'

@@ -1,0 +1,61 @@
+---
+# Shared on-target nohup rebuild pattern
+# ====================================================================
+# Runs nixos-rebuild on the target host itself (not via --target-host).
+# Uses nohup to survive SSH disconnects during sshd restart.
+#
+# Required variable:
+#   _rebuild_on_target_cmd: Full nixos-rebuild command string
+#
+# Registers:
+#   nixos_rebuild_pid: PID of the background process
+#   nixos_rebuild_rc:  Exit code from /tmp/nixos-rebuild.rc
+#   nixos_rebuild_result: Output from /tmp/nixos-rebuild.log
+
+- name: Run nixos-rebuild on target (nohup)
+  ansible.builtin.raw: |
+    nohup sh -c '
+      {{ _rebuild_on_target_cmd }} \
+        > /tmp/nixos-rebuild.log 2>&1
+      echo $? > /tmp/nixos-rebuild.rc
+    ' > /dev/null 2>&1 &
+    echo $!
+  register: nixos_rebuild_pid
+  become: true
+
+- name: Wait for nixos-rebuild to complete
+  ansible.builtin.raw: |
+    while kill -0 {{ nixos_rebuild_pid.stdout_lines[0] }} 2>/dev/null; do sleep 10; done
+    cat /tmp/nixos-rebuild.rc 2>/dev/null || echo 1
+  register: nixos_rebuild_rc
+  until: nixos_rebuild_rc.stdout_lines | default(['']) | last | trim != ''
+  retries: "{{ (nixos_flake_rebuild_timeout | int / 10) | int }}"
+  delay: 10
+  become: true
+  changed_when: false
+
+- name: Read rebuild output
+  ansible.builtin.raw: cat /tmp/nixos-rebuild.log
+  register: nixos_rebuild_result
+  become: true
+  changed_when: false
+
+# rc=0: success
+# rc=4: warning (some units failed but activation succeeded)
+# rc=1+: actual failure
+- name: Fail if rebuild failed (ignore rc=4 warnings)
+  ansible.builtin.fail:
+    msg: |
+      nixos-rebuild failed (rc={{ nixos_rebuild_rc.stdout_lines | default(['1']) | last | trim }})
+      {{ nixos_rebuild_result.stdout | default('No output') }}
+  when:
+    - (nixos_rebuild_rc.stdout_lines | default(['1']) | last | trim) not in ['0', '4']
+
+- name: Warn about non-critical unit failures
+  ansible.builtin.debug:
+    msg: |
+      nixos-rebuild completed with warnings (rc=4).
+      Some non-critical systemd units may have failed during activation.
+      This is usually safe to ignore (e.g., systemd-networkd-wait-online timeout).
+  when:
+    - (nixos_rebuild_rc.stdout_lines | default(['1']) | last | trim) == '4'

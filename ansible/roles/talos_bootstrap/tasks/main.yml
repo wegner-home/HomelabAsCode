@@ -1,0 +1,120 @@
+---
+# Main task dispatcher for talos_bootstrap role
+# Dispatches to phase-specific task files based on bootstrap_mode.
+
+# ===============================================
+# Display Role Banner
+# ===============================================
+- name: Display talos_bootstrap role information
+  ansible.builtin.debug:
+    msg:
+      - "=============================================="
+      - "Talos Bootstrap Role"
+      - "=============================================="
+      - ""
+      - "Cluster: {{ talos_cluster_name }}"
+      - "Endpoint: {{ talos_cluster_endpoint }}"
+      - "Mode: {{ talos_bootstrap_mode }}"
+      - "Talos Version: {{ talos_version }}"
+      - "K8s Version: {{ talos_kubernetes_version }}"
+      - "Control Planes: {{ talos_controlplane_count }}"
+      - "Workers: {{ talos_worker_count }}"
+      - "CNI: {{ talos_cni }}"
+      - 'VIP: {{ talos_vip_ip if talos_vip_enabled else "disabled" }}'
+      - 'FluxCD: {{ "enabled" if talos_fluxcd_enabled else "disabled" }}'
+
+# ===============================================
+# Phase 1: Pre-flight & Discovery
+# ===============================================
+- name: Include pre-flight checks and node discovery
+  ansible.builtin.include_tasks: preflight.yml
+  tags:
+    - preflight
+    - discovery
+
+# ===============================================
+# Phase 2: Secrets & Config Generation
+# ===============================================
+- name: Include Talos secrets and config generation
+  ansible.builtin.include_tasks: generate_config.yml
+  when: talos_bootstrap_mode in ['bootstrap', 'upgrade']
+  tags:
+    - generate
+    - secrets
+    - config
+
+# ===============================================
+# Phase 3: Apply Machine Configs
+# ===============================================
+- name: Include machine config application
+  ansible.builtin.include_tasks: apply_config.yml
+  when: talos_bootstrap_mode in ['bootstrap', 'upgrade']
+  tags:
+    - apply
+    - config
+
+# ===============================================
+# Phase 4: Cluster Bootstrap
+# ===============================================
+- name: Include cluster bootstrap
+  ansible.builtin.include_tasks: bootstrap.yml
+  when: talos_bootstrap_mode == 'bootstrap'
+  tags:
+    - bootstrap
+
+# ===============================================
+# Phase 4.5: Bootstrap CNI (when cni=none)
+# ===============================================
+# Cilium must be installed BEFORE FluxCD because FluxCD pods need
+# pod networking to schedule. Installed via Helm with the same values
+# as the FluxCD HelmRelease so FluxCD adopts it on first reconciliation.
+- name: Include CNI bootstrap (Cilium via Helm)
+  ansible.builtin.include_tasks: install_cni.yml
+  when:
+    - talos_cni == 'none'
+    - talos_bootstrap_mode in ['bootstrap', 'upgrade']
+  tags:
+    - cni
+    - cilium
+
+# ===============================================
+# Phase 5: Kubernetes Verification
+# ===============================================
+- name: Include Kubernetes verification
+  ansible.builtin.include_tasks: verify_kubernetes.yml
+  tags:
+    - verify
+    - kubernetes
+
+# ===============================================
+# Phase 5.5: Bootstrap FluxCD
+# ===============================================
+# Installs FluxCD controllers and configures git source/kustomization.
+# Uses GitLab API token from vault_secrets (static or runtime).
+# Idempotent — safe to re-run.
+- name: Include FluxCD bootstrap
+  ansible.builtin.include_tasks: install_fluxcd.yml
+  when:
+    - talos_fluxcd_enabled | bool
+    - talos_bootstrap_mode in ['bootstrap', 'upgrade']
+  tags:
+    - fluxcd
+    - bootstrap
+
+# ===============================================
+# Phase 6: FluxCD Verification
+# ===============================================
+- name: Include FluxCD verification
+  ansible.builtin.include_tasks: verify_fluxcd.yml
+  when: talos_fluxcd_enabled | bool
+  tags:
+    - verify
+    - fluxcd
+
+# ===============================================
+# Summary
+# ===============================================
+- name: Include deployment summary
+  ansible.builtin.include_tasks: summary.yml
+  tags:
+    - summary

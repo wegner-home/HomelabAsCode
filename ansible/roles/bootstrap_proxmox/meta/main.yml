@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: >-
+    Per-node Proxmox setup orchestrator — packages, filesystem, subscription
+    nag removal, API user/token creation (parameterized), OS users/groups,
+    vault persistence. Delegates cluster formation to proxmox_cluster role.
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+
+dependencies:
+  - role: sops_write

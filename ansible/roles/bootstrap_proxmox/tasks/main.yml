@@ -1,0 +1,30 @@
+---
+# bootstrap_proxmox — Per-node Proxmox setup
+# ====================================================================
+# Sequences: packages → filesystem → subscription nag → OS users
+#
+# API user/token creation and SOPS persistence live in stage_1.yml
+# Play 2, running once per cluster after proxmox_cluster formation.
+#
+# Shared includes:
+#   - _create_api_user.yml: Parameterized PVE API user/role/token creation
+#     (called from stage_1.yml with run_once: true)
+
+- name: install required Packages
+  ansible.builtin.apt:
+    name: "{{ bootstrap_proxmox_packages }}"
+    state: present
+  become: true
+
+- name: FileSystem Tasks
+  ansible.builtin.include_tasks: fs.yml
+
+- name: Remove subscription nag
+  ansible.builtin.include_tasks: remove_subscription_nag.yml
+
+- name: Create users and groups
+  ansible.builtin.include_tasks: users.yml
+# NOTE: API user/token creation and SOPS persistence have been moved to
+# stage_1.yml Play 2 (cluster-wide tasks with run_once) so they execute
+# only once AFTER cluster formation, when pveum replicates automatically.
+

@@ -1,0 +1,8 @@
+---
+# defaults file for proxmox_repos role
+# These variables have the lowest precedence and are easily overridden.
+
+# Default set of packages to install on all systems
+proxmox_repos_packages:
+  - gpg
+  - python3-proxmoxer

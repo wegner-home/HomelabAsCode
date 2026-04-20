@@ -1,0 +1,53 @@
+---
+# Mount Common Shares
+- name: Ensure admin folder exists
+  ansible.builtin.file:
+    path: '{{ bootstrap_proxmox_folder }}'
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  become: true
+
+- name: Create common directorys if they do not exist
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  loop: '{{ bootstrap_proxmox_common_dirs }}'
+  become: true
+  when: bootstrap_proxmox_common_dirs is defined and bootstrap_proxmox_common_dirs | length > 0
+
+- name: Setup Share Login
+  ansible.builtin.template:
+    src: sharelogin.j2
+    dest: '{{ bootstrap_proxmox_folder }}/.sharelogin'
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  when: bootstrap_proxmox_nas_user is defined and bootstrap_proxmox_nas_pass is defined
+
+- name: Ensure CIFS mounts are present and correct
+  ansible.posix.mount:
+    src: '{{ item.src }}'
+    path: '{{ item.path }}'
+    fstype: '{{ item.fstype }}'
+    opts: '{{ item.opts }}'
+    state: present
+  loop: '{{ bootstrap_proxmox_common_mounts }}'
+  become: true
+  when: bootstrap_proxmox_common_mounts is defined and bootstrap_proxmox_common_mounts | length > 0
+
+- name: Reload mounts
+  ansible.posix.mount:
+    src: '{{ item.src }}'
+    path: '{{ item.path }}'
+    fstype: '{{ item.fstype }}'
+    opts: '{{ item.opts }}'
+    state: mounted
+  loop: '{{ bootstrap_proxmox_common_mounts }}'
+  become: true
+  when: bootstrap_proxmox_common_mounts is defined and bootstrap_proxmox_common_mounts | length > 0

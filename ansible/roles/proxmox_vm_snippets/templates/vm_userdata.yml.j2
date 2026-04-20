@@ -1,0 +1,85 @@
+#cloud-config
+hostname: {{ item.key }}
+manage_etc_hosts: true
+
+users:
+  - name: {{ global_admin_user | default('admin') }}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: {{ global_admin_group |default('admin') }}, wheel
+
+  - name: {{ global_service_user | default('ansible') }}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: {{ global_admin_group |default('admin') }}, wheel
+
+
+groups:
+  - {{ global_group | default('{{ project_name }}') }}
+
+network:
+  version: 2
+  ethernets:
+    ens18:
+      addresses:
+        - {{ item.value.ip_address }}/{{ item.value.cidr | default('24') }}
+      nameservers:
+        addresses:
+{% for dns in global_dns_servers | default(['8.8.8.8', '8.8.4.4']) %}
+          - {{ dns }}
+{% endfor %}
+
+package_update: true
+package_upgrade: true
+packages:
+  - qemu-guest-agent
+  - python3
+  - python3-pip
+  - curl
+  - wget
+  - git
+
+runcmd:
+  - [ systemctl, daemon-reload ]
+  - [ systemctl, enable, qemu-guest-agent ]
+  - [ systemctl, start, qemu-guest-agent ]
+  - [ systemctl, restart, sshd ]
+
+ssh_pwauth: false
+disable_root: true
+
+write_files:
+  - path: /etc/ssh/ca_user_key.pub
+    content: |
+      {{ lookup('file', global_ssh_ca_base_dir + '/' + global_ssh_ca_key_name + '.pub') }}
+    permissions: '0644'
+    owner: root:root
+  - path: /etc/ssh/auth_principals/default
+    content: |
+      {{ global_admin_group | default('admin') }}
+      {{ global_group | default('{{ project_name }}') }}
+    permissions: '0644'
+    owner: root:root
+  - path: "/etc/ssh/sshd_config.d/99-{{ project_name }}.conf"
+    content: |
+      # {{ project_name }} SSH CA Configuration
+      TrustedUserCAKeys /etc/ssh/ca_user_key.pub
+      AuthorizedPrincipalsFile /etc/ssh/auth_principals/default
+      PubkeyAuthentication yes
+      PasswordAuthentication no
+      ChallengeResponseAuthentication no
+    permissions: '0644'
+    owner: root:root
+
+final_message: |
+  cloud-init has finished
+  ----------------------------------------
+  version: $version
+  timestamp: $timestamp
+  start up time: $uptime
+
+  VM Details:
+  ----------------------------------------
+  hostname: {{ item.key }}
+  ip_addresss: {{ item.value.ip_address }}
+  ----------------------------------------

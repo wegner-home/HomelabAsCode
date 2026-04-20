@@ -1,0 +1,339 @@
+---
+# Simplified SOPS/Age setup for remote NixOS hosts
+#
+# This approach:
+# 1. Checks if age key exists in vault for this host
+# 2. If not, generates a new one locally and stores it
+# 3. Updates local .sops.yaml with the host's public key
+# 4. Re-encrypts secrets so the host can decrypt them
+# 5. Copies the private key to the VM
+#
+# This runs BEFORE flake deployment, avoiding the chicken-and-egg problem.
+
+- name: Set host key variable name
+  ansible.builtin.set_fact:
+    _host_key_var: 'sops_age_key_{{ inventory_hostname | replace("-", "_") }}'
+    _host_pubkey_var: 'sops_age_pubkey_{{ inventory_hostname | replace("-", "_") }}'
+
+# =====================================================
+# Step 1: Check if we already have a key for this host
+# =====================================================
+- name: Check if age key exists in vault for this host
+  ansible.builtin.set_fact:
+    _existing_age_key: '{{ sops_managed_host_keys[inventory_hostname] | default({}) }}'
+  when: sops_managed_host_keys is defined and sops_managed_host_keys | length > 0
+
+- name: Set existing key facts if found
+  ansible.builtin.set_fact:
+    sops_host_age_private_key: '{{ _existing_age_key.private_key }}'
+    sops_host_age_public_key: '{{ _existing_age_key.public_key }}'
+    _key_from_vault: true
+  when:
+    - _existing_age_key is defined
+    - _existing_age_key.private_key is defined
+    - _existing_age_key.public_key is defined
+
+# =====================================================
+# Step 2: Generate new age key if needed (on localhost)
+# =====================================================
+- name: Generate new age key for host
+  when: sops_host_age_public_key is not defined
+  delegate_to: localhost
+  become: false
+  block:
+    - name: Create temp directory for age key
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .age
+      register: _age_key_tempdir
+
+    - name: Set temp key path
+      ansible.builtin.set_fact:
+        _age_key_path: '{{ _age_key_tempdir.path }}/key.txt'
+
+    - name: Generate age keypair
+      ansible.builtin.command:
+        cmd: age-keygen -o {{ _age_key_path }}
+      changed_when: true
+
+    - name: Read generated age key
+      ansible.builtin.slurp:
+        src: '{{ _age_key_path }}'
+      register: _age_key_content
+
+    - name: Extract public key from generated key
+      ansible.builtin.shell: |
+        grep "# public key:" {{ _age_key_path }} | cut -d: -f2 | tr -d ' '
+      register: _age_pubkey_result
+      changed_when: false
+
+    - name: Extract private key from generated key
+      ansible.builtin.shell: |
+        grep -v "^#" {{ _age_key_path }} | head -1
+      register: _age_privkey_result
+      changed_when: false
+
+    - name: Set key facts from newly generated key
+      ansible.builtin.set_fact:
+        sops_host_age_private_key: '{{ _age_privkey_result.stdout | trim }}'
+        sops_host_age_public_key: '{{ _age_pubkey_result.stdout | trim }}'
+        _key_from_vault: false
+
+    - name: Remove temp key directory
+      ansible.builtin.file:
+        path: '{{ _age_key_tempdir.path }}'
+        state: absent
+
+    - name: Display newly generated key
+      ansible.builtin.debug:
+        msg:
+          - '========================================'
+          - 'NEW AGE KEY GENERATED for {{ inventory_hostname }}'
+          - '========================================'
+          - 'Public Key: {{ sops_host_age_public_key }}'
+          - 'Key will be persisted to runtime_secrets.sops.yaml'
+          - '========================================'
+
+# =====================================================
+# Step 2b: Persist newly generated key to runtime_secrets
+# =====================================================
+- name: Persist host key to runtime_secrets.sops.yaml
+  ansible.builtin.include_role:
+    name: sops_write
+  vars:
+    new_secrets:
+      sops_host_keys:
+        '{{ inventory_hostname }}':
+          private_key: '{{ sops_host_age_private_key }}'
+          public_key: '{{ sops_host_age_public_key }}'
+  when:
+    - not (_key_from_vault | default(false))
+    - sops_host_age_private_key is defined
+    - sops_host_age_public_key is defined
+
+# =====================================================
+# Step 3: Update local .sops.yaml with host's public key
+# =====================================================
+- name: Update local .sops.yaml with host key
+  delegate_to: localhost
+  become: false
+  block:
+    - name: Read current .sops.yaml
+      ansible.builtin.slurp:
+        src: '{{ sops_age_flake_repo_path }}/.sops.yaml'
+      register: _current_sops_yaml
+
+    - name: Check if host key already in .sops.yaml
+      ansible.builtin.set_fact:
+        _key_in_sops_yaml: '{{ sops_host_age_public_key in (_current_sops_yaml.content | b64decode) }}'
+
+    - name: Add host key to .sops.yaml
+      when: not _key_in_sops_yaml
+      block:
+        - name: Validate admin public key is available
+          ansible.builtin.assert:
+            that:
+              - sops_age_admin_public_key | default('') | length > 0
+            fail_msg: |
+              SOPS admin public key is empty! Ensure global_sops_admin_age_key is set in group_vars
+              or vault_secrets.sops.admin_public_key exists in your SOPS secrets file.
+              Run stage-0 to generate and store the admin age key.
+            success_msg: 'Admin public key found: {{ sops_age_admin_public_key[:20] }}...'
+
+        - name: Build updated host keys dict
+          ansible.builtin.set_fact:
+            _all_host_keys: '{{ sops_managed_host_keys | default({}) | combine({inventory_hostname: sops_host_age_public_key}) }}'
+
+        - name: Update .sops.yaml with all host keys
+          ansible.builtin.template:
+            src: sops_yaml_update.yml.j2
+            dest: '{{ sops_age_flake_repo_path }}/.sops.yaml'
+            mode: '0644'
+          vars:
+            sops_update_host_keys: '{{ _all_host_keys }}'
+            # Admin key loaded via direct SOPS lookup in defaults (sops_age_admin_public_key)
+            _template_admin_key: '{{ sops_age_admin_public_key }}'
+
+        - name: Check if we can decrypt the secrets file
+          ansible.builtin.shell: |
+            sops -d secrets/secrets.yaml > /dev/null 2>&1
+          args:
+            chdir: '{{ sops_age_flake_repo_path }}'
+          environment:
+            SOPS_AGE_KEY_FILE: '{{ global_sops_key_path }}'
+          register: _sops_decrypt_check
+          failed_when: false
+          changed_when: false
+          delegate_to: localhost
+          become: false
+
+        - name: Re-encrypt secrets.yaml with updated keys
+          ansible.builtin.shell: |
+            sops updatekeys --yes secrets/secrets.yaml
+          args:
+            chdir: '{{ sops_age_flake_repo_path }}'
+          environment:
+            SOPS_AGE_KEY_FILE: '{{ global_sops_key_path }}'
+          register: _sops_updatekeys
+          changed_when: "'already up to date' not in _sops_updatekeys.stderr"
+          delegate_to: localhost
+          become: false
+          when: _sops_decrypt_check.rc == 0
+
+        - name: Warn if secrets file cannot be re-encrypted
+          ansible.builtin.debug:
+            msg:
+              - 'WARNING: Cannot re-encrypt {{ sops_age_flake_repo_path }}/secrets/secrets.yaml'
+              - "The file is encrypted with keys you don't have access to."
+              - 'You may need to manually re-encrypt it with your current admin key.'
+              - 'Run: cd {{ sops_age_flake_repo_path }} && sops updatekeys secrets/secrets.yaml'
+          when: _sops_decrypt_check.rc != 0
+
+        - name: Display SOPS update result
+          ansible.builtin.debug:
+            msg: 'Updated .sops.yaml and re-encrypted secrets for {{ inventory_hostname }}'
+
+# =====================================================
+# Step 4: Deploy age private key to remote host
+# =====================================================
+- name: Ensure SOPS key directory exists on remote
+  ansible.builtin.file:
+    path: '{{ sops_age_remote_key_file | dirname }}'
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  become: true
+
+- name: Deploy age private key to remote host
+  ansible.builtin.copy:
+    content: |
+      # created: {{ ansible_date_time.iso8601 | default('N/A') }}
+      # public key: {{ sops_host_age_public_key }}
+      {{ sops_host_age_private_key }}
+    dest: '{{ sops_age_remote_key_file }}'
+    mode: '0600'
+    owner: root
+    group: root
+  become: true
+
+# =====================================================
+# Step 5: Generate host-specific secrets from SOPS
+# =====================================================
+- name: Generate and deploy host-specific secrets
+  when: sops_age_generate_host_secrets | default(true) | bool
+  block:
+    - name: Determine host role for secrets
+      ansible.builtin.set_fact:
+        _effective_host_role: '{{ host_role | default("service") }}'
+
+    - name: Get role-based secrets mapping
+      ansible.builtin.set_fact:
+        _role_secrets: '{{ sops_age_secrets_by_role[_effective_host_role] | default({}) }}'
+
+    - name: Merge host-specific secret overrides
+      ansible.builtin.set_fact:
+        _host_secrets: '{{ _role_secrets | combine(sops_age_host_secrets | default({})) }}'
+
+    - name: Display secrets being generated
+      ansible.builtin.debug:
+        msg:
+          - 'Generating secrets for host: {{ inventory_hostname }}'
+          - 'Host role: {{ _effective_host_role }}'
+          - 'Secrets to generate: {{ _host_secrets.keys() | list }}'
+      when: _host_secrets | length > 0
+
+    - name: Create temp directory for secrets generation
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .sops_secrets
+      register: _secrets_tempdir
+      delegate_to: localhost
+      become: false
+
+    - name: Generate unencrypted secrets file from vault
+      ansible.builtin.template:
+        src: secrets_from_vault.yaml.j2
+        dest: '{{ _secrets_tempdir.path }}/secrets.yaml'
+        mode: '0600'
+      delegate_to: localhost
+      become: false
+
+    - name: Encrypt secrets file with SOPS
+      ansible.builtin.shell: |
+        sops --encrypt \
+          --config /dev/null \
+          --age {{ sops_host_age_public_key }},{{ sops_age_admin_public_key | default(sops_host_age_public_key) }} \
+          --input-type yaml \
+          --output-type yaml \
+          {{ _secrets_tempdir.path }}/secrets.yaml > {{ _secrets_tempdir.path }}/secrets.yaml.enc
+      environment:
+        SOPS_AGE_KEY_FILE: '{{ global_sops_key_path }}'
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Ensure secrets directory exists on remote
+      ansible.builtin.file:
+        path: '{{ sops_age_remote_secrets_file | dirname }}'
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      become: true
+
+    - name: Deploy encrypted secrets to remote host
+      ansible.builtin.copy:
+        src: '{{ _secrets_tempdir.path }}/secrets.yaml.enc'
+        dest: '{{ sops_age_remote_secrets_file }}'
+        mode: '0600'
+        owner: root
+        group: root
+      become: true
+      register: _secrets_deployed
+
+    # Step 5b: Copy encrypted secrets to local flake repo so the nix
+    # closure (sops.defaultSopsFile = ../../secrets/secrets.yaml)
+    # references a file encrypted for the current host + admin keys.
+    - name: Ensure repo secrets directory exists
+      ansible.builtin.file:
+        path: '{{ sops_age_flake_repo_path }}/secrets'
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: false
+
+    - name: Copy encrypted secrets to flake repo for nix closure
+      ansible.builtin.copy:
+        src: '{{ _secrets_tempdir.path }}/secrets.yaml.enc'
+        dest: '{{ sops_age_flake_repo_path }}/secrets/secrets.yaml'
+        mode: '0600'
+      delegate_to: localhost
+      become: false
+
+    - name: Clean up temp directory
+      ansible.builtin.file:
+        path: '{{ _secrets_tempdir.path }}'
+        state: absent
+      delegate_to: localhost
+      become: false
+
+    - name: Display secrets deployment result
+      ansible.builtin.debug:
+        msg:
+          - 'Secrets deployed to {{ sops_age_remote_secrets_file }}'
+          - 'Secrets copied to {{ sops_age_flake_repo_path }}/secrets/secrets.yaml (nix closure)'
+          - 'Encrypted for: {{ inventory_hostname }} (+ admin)'
+          - 'Secrets count: {{ _host_secrets | length }}'
+      when: _secrets_deployed.changed
+
+- name: Display SOPS setup complete
+  ansible.builtin.debug:
+    msg:
+      - '========================================'
+      - 'SOPS/Age Setup Complete: {{ inventory_hostname }}'
+      - '========================================'
+      - 'Public Key: {{ sops_host_age_public_key }}'
+      - 'Key File: {{ sops_age_remote_key_file }}'
+      - "Key Source: {{ 'vault' if _key_from_vault | default(false) else 'newly generated' }}"
+      - '========================================'

@@ -1,0 +1,25 @@
+---
+# Default variables for gitlab_repo_init role
+# ====================================================================
+# Pushes local directory content to GitLab repositories.
+# Loops over gitlab_projects; only processes items with local_path defined.
+#
+# When called from gitlab_configure orchestrator, API connection vars cascade
+# from the parent role. When called standalone, these defaults apply.
+
+# ===============================================
+# API Connection (inherited when orchestrated)
+# ===============================================
+gitlab_api_url: 'https://{{ ansible_host | default(ansible_default_ipv4.address) }}'
+gitlab_api_token: '{{ vault_secrets.gitlab.api_token | default("") }}'
+gitlab_ssl_verify: false
+
+# ===============================================
+# Repository Initialization Settings (role-owned)
+# ===============================================
+gitlab_repo_init_enable: true
+gitlab_repo_templates_dir: '{{ global_iac_blueprint_dir }}'
+gitlab_repo_default_namespace: 'iac'
+gitlab_repo_default_visibility: 'private'
+gitlab_repo_git_user_name: 'Ansible Automation'
+gitlab_repo_git_user_email: 'ansible@{{ global_domain }}'

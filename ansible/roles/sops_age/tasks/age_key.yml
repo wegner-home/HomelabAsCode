@@ -1,0 +1,42 @@
+---
+# Age key generation and management tasks
+
+- name: Ensure SOPS/age directory exists
+  ansible.builtin.file:
+    path: '{{ sops_age_sops_dir }}'
+    state: directory
+    mode: '0700'
+
+- name: Check if age key exists
+  ansible.builtin.stat:
+    path: '{{ sops_age_key_path }}'
+  register: age_key_file
+
+- name: Generate age key if not exists
+  ansible.builtin.shell: |
+    age-keygen -o {{ sops_age_key_path }}
+  when: not age_key_file.stat.exists
+  changed_when: true
+
+- name: Ensure age key has correct permissions
+  ansible.builtin.file:
+    path: '{{ sops_age_key_path }}'
+    mode: '0600'
+    owner: '{{ _resolved_owner }}'
+
+- name: Read age public key
+  ansible.builtin.shell: |
+    grep "# public key:" "{{ sops_age_key_path }}" | cut -d ':' -f2 | tr -d ' '
+  register: age_public_key_output
+  changed_when: false
+
+- name: Set age public key fact
+  ansible.builtin.set_fact:
+    sops_age_public_key: '{{ age_public_key_output.stdout | trim }}'
+
+- name: Display age public key
+  ansible.builtin.debug:
+    msg: |
+      Age public key: {{ sops_age_public_key }}
+      Add this to your .sops.yaml configuration for NixOS secrets encryption.
+      Also update your inventory: global_age_public_key: {{ sops_age_public_key }}

@@ -1,0 +1,50 @@
+#cloud-config
+hostname: template-vm
+manage_etc_hosts: true
+
+users:
+  - name: {{ global_admin_user | default('admin') }}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - "{{ lookup('file', global_ssh_admin_cert) }}"
+    shell: /bin/bash
+    groups: {{ global_admin_group |default('admin') }}, wheel
+
+  - name: {{ global_service_user | default('ansible') }}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - "{{ lookup('file', global_ssh_admin_cert) }}"
+    shell: /bin/bash
+    groups: {{ global_admin_group |default('admin') }}, wheel
+
+groups:
+  - {{ global_group | default('{{ project_name }}') }}
+
+network:
+  version: 2
+  ethernets:
+    ens18:
+      addresses:
+        - 10.99.99.99/24
+      nameservers:
+        addresses:
+{% for dns in global_dns_servers | default(['8.8.8.8', '8.8.4.4']) %}
+          - {{ dns }}
+{% endfor %}
+
+package_update: true
+package_upgrade: true
+packages:
+  - qemu-guest-agent
+  - python3
+  - python3-pip
+  - curl
+  - wget
+  - git
+
+runcmd:
+  - [ systemctl, enable, qemu-guest-agent ]
+  - [ systemctl, start, qemu-guest-agent ]
+
+ssh_pwauth: false
+disable_root: true

@@ -1,0 +1,116 @@
+---
+# Default variables for talos_bootstrap role
+# All values derived from global_talos_cluster inventory vars where possible.
+
+# ===============================================
+# Cluster Identity
+# ===============================================
+talos_cluster_name: '{{ global_talos_cluster.cluster_name | default(project_name) }}'
+talos_cluster_endpoint: '{{ global_talos_cluster.cluster_endpoint }}'
+talos_kubernetes_version: '{{ global_talos_cluster.kubernetes_version | default("v1.32.0") }}'
+talos_version: '{{ global_talos_cluster.talos_version | default("v1.7.6") }}'
+
+# ===============================================
+# Bootstrap Mode
+# ===============================================
+# bootstrap  — full flow: secrets → config → apply → bootstrap → verify
+# upgrade    — re-apply machine configs + health check (cluster already exists)
+# verify-only — skip to K8s + FluxCD verification only
+talos_bootstrap_mode: '{{ global_talos_cluster.bootstrap_mode | default("bootstrap") }}'
+
+# ===============================================
+# Node Topology (derived from inventory)
+# ===============================================
+talos_controlplane_count: '{{ global_talos_cluster.controlplane_count | default(3) | int }}'
+talos_worker_count: '{{ global_talos_cluster.worker_count | default(3) | int }}'
+talos_allow_scheduling_on_controlplane: '{{ global_talos_cluster.allow_scheduling_on_controlplane | default(false) | bool }}'
+
+talos_controlplane_ip_start: '{{ global_talos_cluster.controlplane.ip_start }}'
+talos_worker_ip_start: '{{ global_talos_cluster.worker.ip_start }}'
+
+# ===============================================
+# Networking — CNI, VIP, MetalLB
+# ===============================================
+talos_cni: '{{ global_talos_cluster.cni | default("none") }}'
+
+talos_vip_enabled: '{{ global_talos_cluster.vip.enabled | default(true) | bool }}'
+talos_vip_ip: '{{ global_talos_cluster.vip.ip }}'
+talos_vip_interface: '{{ global_talos_cluster.vip.interface | default("eth0") }}'
+
+talos_metallb_enabled: '{{ global_talos_cluster.metallb.enabled | default(true) | bool }}'
+talos_metallb_address_pool: '{{ global_talos_cluster.metallb.address_pool }}'
+
+# Cilium CNI bootstrap (used when cni=none to break FluxCD chicken-and-egg)
+talos_cilium_version: '{{ global_talos_cluster.cilium_version | default("1.16.5") }}'
+talos_cilium_helm_repo: 'https://helm.cilium.io/'
+talos_cilium_ready_timeout: '300s'
+
+# ===============================================
+# Talos Extensions
+# ===============================================
+# Structured list of {name, version} objects — single source of truth.
+# - name:    used by Talos Factory (ISO build) and Terraform
+# - version: used by machine.install.extensions for persistence across upgrades
+talos_extensions: '{{ global_talos_cluster.talos_extensions | default([]) }}'
+
+# ===============================================
+# FluxCD
+# ===============================================
+talos_fluxcd_enabled: '{{ global_talos_cluster.fluxcd.enabled | default(false) | bool }}'
+# Falls back to the k8s repo bootstrapped by Stage 4 (gitlab_api_bootstrap)
+# when fluxcd.git_repo is left empty in inventory.
+talos_fluxcd_git_repo: >-
+  {{ global_talos_cluster.fluxcd.git_repo | default("")
+     | ternary(
+         global_talos_cluster.fluxcd.git_repo | default(""),
+         "https://git." + global_domain + "/infrastructure/k8s.git"
+       ) }}
+talos_fluxcd_git_branch: '{{ global_talos_cluster.fluxcd.git_branch | default("main") }}'
+talos_fluxcd_git_path: '{{ global_talos_cluster.fluxcd.git_path | default("clusters/" ~ project_name) }}'
+# GitLab API token — loaded from vault_secrets (static secrets.sops.yaml OR
+# runtime_secrets.sops.yaml written by Stage 4). load_vaults.yml merges both.
+talos_fluxcd_git_token: '{{ vault_secrets.gitlab.api_token | default("") }}'
+# Skip TLS verification for self-signed certificates (e.g. GitLab)
+talos_fluxcd_git_insecure: '{{ global_talos_cluster.fluxcd.git_insecure | default(false) | bool }}'
+
+# ===============================================
+# Artifact Paths
+# ===============================================
+talos_output_dir: '{{ global_talos_cluster.artifacts.output_dir | default("../config/" + talos_env + "/talos") }}'
+talos_kubeconfig_path: '{{ global_talos_cluster.artifacts.kubeconfig_path | default(talos_output_dir + "/kubeconfig") }}'
+talos_talosconfig_path: '{{ global_talos_cluster.artifacts.talosconfig_path | default(talos_output_dir + "/talosconfig") }}'
+talos_secrets_path: '{{ talos_output_dir }}/secrets.yaml'
+talos_controlplane_config_path: '{{ talos_output_dir }}/controlplane.yaml'
+talos_worker_config_path: '{{ talos_output_dir }}/worker.yaml'
+talos_sops_encrypt: '{{ global_talos_cluster.artifacts.sops_encrypt | default(true) | bool }}'
+
+# Environment name for path construction
+talos_env: '{{ lookup("env", "NIX_ENV") | default("dev", true) }}'
+
+# ===============================================
+# Timeouts & Retries
+# ===============================================
+talos_wait_timeout: 600
+talos_wait_delay: 10
+talos_api_port: 50000
+talos_health_timeout: '10m'
+
+# ===============================================
+# CLI Tool Minimum Versions
+# ===============================================
+talos_min_talosctl_version: '1.7.0'
+talos_min_kubectl_version: '1.28.0'
+talos_min_flux_version: '2.0.0'
+
+# ===============================================
+# Config Patch Flags
+# ===============================================
+# These control which Talos machine config patches are applied.
+# Only patches that MUST be at the Talos level are included.
+# All application deployments (Cilium, MetalLB, Longhorn, etc.) are via FluxCD.
+talos_patch_cilium: true
+talos_patch_kubevip: '{{ talos_vip_enabled }}'
+talos_patch_scheduling: '{{ talos_allow_scheduling_on_controlplane }}'
+talos_patch_longhorn: true
+talos_patch_kubelet: true
+talos_patch_extensions: '{{ (talos_extensions | length) > 0 }}'

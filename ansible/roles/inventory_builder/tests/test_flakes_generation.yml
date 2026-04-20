@@ -1,0 +1,95 @@
+---
+# Test playbook for inventory_builder role - NixOS flakes generation
+# This demonstrates the dual generation capability:
+#   1. Terraform .tfvars for infrastructure provisioning
+#   2. NixOS flake repository for configuration management
+
+- name: Test NixOS Flakes Generation
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars:
+    # Enable both Terraform and Flakes generation
+    inventory_builder_generate_nixos_vms: true
+    inventory_builder_generate_flakes: true
+    inventory_builder_generate_talos: false
+
+    # Test output directories
+    inventory_builder_project_dir: '{{ playbook_dir }}/test_output/terraform'
+    inventory_builder_flakes_dir: '{{ playbook_dir }}/test_output/nixos_flakes'
+
+  tasks:
+    - name: Display test information
+      ansible.builtin.debug:
+        msg:
+          - 'Testing inventory_builder role with flakes generation'
+          - 'Output directories:'
+          - '  - Terraform: {{ inventory_builder_project_dir }}'
+          - '  - NixOS Flakes: {{ inventory_builder_flakes_dir }}'
+          - ''
+          - 'This will generate:'
+          - '  1. Terraform .tfvars files (infrastructure)'
+          - '  2. NixOS flake.nix and per-host configuration.nix files'
+
+    - name: Ensure test output directories exist
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        mode: '0755'
+      loop:
+        - '{{ inventory_builder_project_dir }}'
+        - '{{ inventory_builder_flakes_dir }}'
+
+    - name: Include inventory_builder role
+      ansible.builtin.include_role:
+        name: inventory_builder
+
+    - name: Verify generated Terraform files
+      ansible.builtin.stat:
+        path: '{{ inventory_builder_project_dir }}/{{ item }}'
+      register: tf_files
+      loop:
+        - nixos-vms.auto.tfvars
+        - nixos-subnets.auto.tfvars
+        - nixos-reservations.auto.tfvars
+        - terraform.tfvars
+
+    - name: Verify generated NixOS flake files
+      ansible.builtin.stat:
+        path: '{{ inventory_builder_flakes_dir }}/{{ item }}'
+      register: flake_files
+      loop:
+        - flake.nix
+        - README.md
+        - .gitignore
+
+    - name: Display test results
+      ansible.builtin.debug:
+        msg:
+          - 'Test Results:'
+          - '============='
+          - 'Terraform files generated:'
+          - "{% for result in tf_files.results %}  - {{ result.item }}: {{ 'OK' if result.stat.exists else 'MISSING' }}{% endfor %}"
+          - ''
+          - 'NixOS flake files generated:'
+          - "{% for result in flake_files.results %}  - {{ result.item }}: {{ 'OK' if result.stat.exists else 'MISSING' }}{% endfor %}"
+          - ''
+          - 'Next steps:'
+          - '  1. Review: cat {{ inventory_builder_flakes_dir }}/README.md'
+          - '  2. Validate: cd {{ inventory_builder_flakes_dir }} && nix flake check'
+          - '  3. Show VMs: cd {{ inventory_builder_flakes_dir }} && nix flake show'
+
+    - name: List generated host configurations
+      ansible.builtin.find:
+        paths: '{{ inventory_builder_flakes_dir }}/hosts'
+        file_type: directory
+        depth: 1
+      register: host_dirs
+
+    - name: Display generated hosts
+      ansible.builtin.debug:
+        msg:
+          - 'Generated NixOS configurations for {{ host_dirs.files | length }} hosts:'
+          - "{{ host_dirs.files | map(attribute='path') | map('basename') | list }}"
+      when: host_dirs.files | length > 0

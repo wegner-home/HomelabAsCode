@@ -1,0 +1,14 @@
+# VIP patch — applied to CONTROL PLANE nodes only
+# Uses Talos native VIP (machine.network layer) instead of kube-vip.
+# Native VIP works before the Kubernetes API is up, avoiding the
+# chicken-and-egg problem where kube-vip (as an inline manifest)
+# needs the API server, but the API server needs the VIP to be reachable.
+# IMPORTANT: dhcp must be explicitly set to preserve DHCP on the interface,
+# otherwise Talos treats the interface block as a complete override.
+machine:
+  network:
+    interfaces:
+      - interface: {{ talos_vip_interface }}
+        dhcp: true
+        vip:
+          ip: {{ talos_vip_ip }}

@@ -1,0 +1,14 @@
+---
+- name: Sign the host public key on the CA server
+  ansible.builtin.shell:
+    cmd: >
+      ssh-keygen -s "{{ bootstrap_ssh_cert_ca_base_dir }}/{{ bootstrap_ssh_cert_ca_key_name }}"
+      -h
+      -I "{{ inventory_hostname }}"
+      -n "{{ ansible_fqdn }},{{ inventory_hostname }},{{ ansible_default_ipv4.address }}"
+      -V "+365d"
+      "{{ bootstrap_ssh_cert_host_pub_key_path }}"
+    creates: '{{ bootstrap_ssh_cert_host_cert }}'
+  become: true
+  delegate_to: '{{ bootstrap_ssh_cert_ca_server }}'
+  changed_when: true

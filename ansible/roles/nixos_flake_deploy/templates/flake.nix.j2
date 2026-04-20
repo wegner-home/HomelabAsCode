@@ -1,0 +1,25 @@
+{
+  description = "NixOS Configuration for {{ nixos_host_hostname }} ({{ nixos_host_role }})";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/{{ nixos_channel | default('nixos-unstable') }}";
+{% if nixos_host_sops_enable %}
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+{% endif %}
+  };
+
+  outputs = { self, nixpkgs{% if nixos_host_sops_enable %}, sops-nix{% endif %}, ... }: {
+    nixosConfigurations.{{ nixos_flake_host }} = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+{% if nixos_host_sops_enable %}
+        sops-nix.nixosModules.sops
+{% endif %}
+      ];
+    };
+  };
+}

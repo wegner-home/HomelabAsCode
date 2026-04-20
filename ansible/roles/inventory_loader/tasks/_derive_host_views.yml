@@ -1,0 +1,75 @@
+---
+# Derive convenience views from inventory_builder_all_hosts
+# ========================================================
+# Called once after all host_vars are loaded via _load_all_hostvars.yml
+#
+# Creates filtered dictionaries for easier access in templates:
+#   - inventory_builder_nixos_vms:    All NixOS VMs (keyed by hostname)
+#   - inventory_builder_talos_cp:     Talos controlplane nodes
+#   - inventory_builder_talos_worker: Talos worker nodes
+#   - inventory_builder_all_vms:      Legacy alias for NixOS VMs (backward compat)
+#   - inventory_builder_host_vars_map: Legacy map of hostname → source file path
+
+- name: Derive NixOS VMs view
+  ansible.builtin.set_fact:
+    inventory_builder_nixos_vms: >-
+      {{ inventory_builder_all_hosts | default({}) | dict2items
+         | selectattr('value._vm_type', 'equalto', 'nixos')
+         | items2dict }}
+  run_once: true
+
+- name: Derive Talos controlplane nodes view
+  ansible.builtin.set_fact:
+    inventory_builder_talos_cp: >-
+      {{ inventory_builder_all_hosts | default({}) | dict2items
+         | selectattr('value._vm_type', 'equalto', 'talos_cp')
+         | items2dict }}
+  run_once: true
+
+- name: Derive Talos worker nodes view
+  ansible.builtin.set_fact:
+    inventory_builder_talos_worker: >-
+      {{ inventory_builder_all_hosts | default({}) | dict2items
+         | selectattr('value._vm_type', 'equalto', 'talos_worker')
+         | items2dict }}
+  run_once: true
+
+# -----------------------------------------------
+# Legacy compatibility aliases
+# -----------------------------------------------
+# These maintain backward compatibility with existing templates
+# that expect the old variable structure.
+
+- name: Create legacy inventory_builder_all_vms (NixOS VM configs only)
+  ansible.builtin.set_fact:
+    inventory_builder_all_vms: >-
+      {{ dict(inventory_builder_nixos_vms | dict2items
+         | map(attribute='key')
+         | zip(inventory_builder_nixos_vms | dict2items
+               | map(attribute='value.vm_config'))) }}
+  run_once: true
+
+- name: Create legacy inventory_builder_host_vars_map (hostname → source file)
+  ansible.builtin.set_fact:
+    inventory_builder_host_vars_map: >-
+      {{ dict(inventory_builder_nixos_vms | dict2items
+         | map(attribute='key')
+         | zip(inventory_builder_nixos_vms | dict2items
+               | map(attribute='value._source_file'))) }}
+  run_once: true
+
+# -----------------------------------------------
+# Summary output
+# -----------------------------------------------
+- name: Display unified host loading summary
+  ansible.builtin.debug:
+    msg:
+      - '=============================================='
+      - 'Unified Host Vars Loading Complete'
+      - '=============================================='
+      - 'Total hosts loaded: {{ inventory_builder_all_hosts | length }}'
+      - 'NixOS VMs: {{ inventory_builder_nixos_vms | length }} ({{ inventory_builder_nixos_vms.keys() | list | join(", ") | default("none") }})'
+      - 'Talos CP:  {{ inventory_builder_talos_cp | length }} ({{ inventory_builder_talos_cp.keys() | list | join(", ") | default("none") }})'
+      - 'Talos Workers: {{ inventory_builder_talos_worker | length }} ({{ inventory_builder_talos_worker.keys() | list | join(", ") | default("none") }})'
+      - '=============================================='
+  run_once: true

@@ -1,0 +1,36 @@
+---
+# Package verification tasks for NixOS
+
+- name: Check if required packages are available
+  ansible.builtin.command: 'which {{ item }}'
+  register: package_check
+  changed_when: false
+  failed_when: false
+  loop: '{{ bootstrap_localhost_ensure_packages }}'
+
+- name: Display package availability
+  ansible.builtin.debug:
+    msg: "{{ item.item }}: {{ 'Available' if item.rc == 0 else 'Not found - please ensure it is in your NixOS configuration' }}"
+  loop: '{{ package_check.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Warn about missing packages
+  ansible.builtin.fail:
+    msg: >
+      The following packages are not available:
+      {{ package_check.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list | join(', ') }}.
+      Please add them to your NixOS configuration.nix or home-manager configuration.
+  when: package_check.results | selectattr('rc', 'ne', 0) | list | length > 0
+  ignore_errors: true
+
+- name: Check NixOS version
+  ansible.builtin.command: nixos-version
+  register: nixos_version_output
+  changed_when: false
+  failed_when: false
+
+- name: Display NixOS version
+  ansible.builtin.debug:
+    msg: 'NixOS version: {{ nixos_version_output.stdout }}'
+  when: nixos_version_output.rc == 0

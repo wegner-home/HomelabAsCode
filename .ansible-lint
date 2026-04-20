@@ -1,0 +1,37 @@
+---
+# Run: ansible-lint
+# Docs: https://ansible.readthedocs.io/projects/lint/configuring/
+
+# Profile: moderate catches common issues without being overly strict
+profile: moderate
+
+# Paths to lint (relative to this file)
+# Exclude auto-generated inventory files (managed by StackForge)
+exclude_paths:
+  - collections/
+  - .git/
+  - vars/secrets/
+
+# Specific rule overrides
+skip_list:
+  # NixOS VMs use raw/shell commands heavily — these are expected
+  - command-instead-of-module # [command-instead-of-shell]
+  # We use become: true globally in ansible.cfg
+  - no-changed-when # Many shell tasks are idempotent by design
+  # Template-generated inventory uses non-standard patterns
+  - yaml[truthy]
+
+# Warn but don't fail on these
+warn_list:
+  - name[missing] # Some internal tasks skip naming
+  - var-naming[no-role-prefix] # Global vars use global_ prefix, not role prefix
+  - schema[meta] # Our meta files are minimal
+
+# Enable offline mode (don't fetch galaxy deps during lint)
+offline: true
+
+# Use the project's ansible.cfg
+# ansible_config: ansible.cfg
+
+# Colored output
+use_default_rules: true

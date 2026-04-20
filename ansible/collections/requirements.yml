@@ -1,0 +1,22 @@
+---
+# Ansible Collections required
+collections:
+  # Community general — Proxmox modules, GitLab API, general utilities
+  - name: community.general
+    version: ">=8.0.0"
+
+  # SOPS — decrypt secrets via community.sops.sops lookup (used by helpers/load_vaults.yml)
+  - name: community.sops
+    version: ">=1.6.0"
+
+  # Docker collection (for GitLab Runner and other containerized services)
+  - name: community.docker
+    version: ">=3.0.0"
+
+  # Kubernetes collection for Talos/FluxCD management
+  - name: kubernetes.core
+    version: ">=2.4.0"
+
+  # POSIX collection — synchronize, mount, authorized_key
+  - name: ansible.posix
+    version: ">=1.5.0"

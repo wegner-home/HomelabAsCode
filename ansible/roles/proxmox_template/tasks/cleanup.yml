@@ -1,0 +1,54 @@
+---
+# Clean up temporary files
+
+- name: Remove image from Proxmox node
+  ansible.builtin.file:
+    path: '{{ proxmox_template_remote_image_path }}'
+    state: absent
+  become: true
+  when: proxmox_template_remote_image_path is defined
+
+- name: Remove compressed image from Proxmox node
+  ansible.builtin.file:
+    path: '{{ proxmox_template_remote_image_path }}.gz'
+    state: absent
+  become: true
+  when:
+    - proxmox_template_remote_image_path is defined
+    - proxmox_template_compress_transfer | bool
+
+- name: Clean up NixOS build artifacts
+  when:
+    - proxmox_template_source_type == 'nixos_build'
+    - proxmox_template_cleanup | bool
+  block:
+    - name: Remove build artifacts on localhost
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      delegate_to: localhost
+      loop:
+        - '{{ proxmox_template_nixos_build_dir }}/result'
+        - '{{ proxmox_template_nixos_build_dir }}/configuration.nix'
+
+    - name: Remove local NixOS image if not keeping
+      ansible.builtin.file:
+        path: '{{ proxmox_template_local_image_path }}'
+        state: absent
+      delegate_to: localhost
+      when:
+        - not proxmox_template_keep_local_image | bool
+        - proxmox_template_local_image_path is defined
+
+    - name: Remove compressed local image
+      ansible.builtin.file:
+        path: '{{ proxmox_template_local_image_path }}.gz'
+        state: absent
+      delegate_to: localhost
+      when:
+        - proxmox_template_compress_transfer | bool
+        - proxmox_template_local_image_path is defined
+
+- name: Display cleanup result
+  ansible.builtin.debug:
+    msg: 'Temporary files cleaned up'

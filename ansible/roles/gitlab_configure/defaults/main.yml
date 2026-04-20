@@ -1,0 +1,42 @@
+---
+# Default variables for gitlab_configure role
+# ====================================================================
+# Thin orchestrator — delegates to gitlab_api_bootstrap and gitlab_repo_init.
+# Owns: credential generation, service startup waits, validation.
+#
+# Most GitLab configuration lives in group_vars/gitlab_vms/ and host_vars.
+# Child roles: gitlab_api_bootstrap, gitlab_repo_init
+
+# ===============================================
+# Derived Variables (computed from inventory vars)
+# ===============================================
+gitlab_hostname: '{{ inventory_hostname_short | default("gitlab") }}'
+gitlab_domain: "{{ global_domain }}"
+gitlab_fqdn: "{{ gitlab_hostname }}.{{ gitlab_domain }}"
+
+# API URL (use IP for API calls when DNS may not be ready during bootstrap)
+gitlab_use_ip_for_api: true
+gitlab_ip_address: "{{ ansible_host | default(ansible_default_ipv4.address) }}"
+gitlab_api_url: '{{ "https://" + gitlab_ip_address if gitlab_use_ip_for_api else "https://" + gitlab_fqdn }}'
+gitlab_external_url: "https://{{ gitlab_fqdn }}"
+
+# ===============================================
+# Service Ports (for validation health checks)
+# ===============================================
+# HTTPS port — Nginx listens here with forceSSL and proxies to GitLab Puma.
+# Used by validate.yml to check /-/health and /-/readiness on loopback.
+# Note: port 80 redirects (301) to HTTPS, so health checks must use 443.
+gitlab_http_port: 443
+gitlab_health_check_scheme: "https"
+
+# ===============================================
+# Credentials (from vault — required)
+# ===============================================
+gitlab_root_password: "{{ vault_secrets.gitlab.root_password }}"
+gitlab_root_email: "admin@{{ gitlab_domain }}"
+gitlab_api_token: '{{ vault_secrets.gitlab.api_token | default("") }}'
+
+# ===============================================
+# API call settings
+# ===============================================
+gitlab_ssl_verify: false

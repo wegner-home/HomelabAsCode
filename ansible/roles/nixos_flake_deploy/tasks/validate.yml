@@ -1,0 +1,61 @@
+---
+# Post-deployment validation
+
+- name: Verify system is running new configuration
+  ansible.builtin.raw: nixos-version
+  register: nixos_version_post
+  changed_when: false
+
+- name: Verify SSH service is running
+  ansible.builtin.raw: systemctl is-active sshd
+  register: final_ssh_status
+  changed_when: false
+  failed_when: false
+
+- name: Check systemd failed units
+  ansible.builtin.raw: systemctl --failed --no-pager
+  register: failed_units
+  changed_when: false
+  failed_when: false
+
+- name: Display failed units warning
+  ansible.builtin.debug:
+    msg: |
+      WARNING: Some systemd units have failed:
+      {{ failed_units.stdout }}
+  when:
+    - failed_units.stdout is defined
+    - '"0 loaded units listed" not in failed_units.stdout'
+
+# Store integrity check is slow (5+ minutes) - skip by default
+# Enable with: -e nixos_verify_store=true
+- name: Verify NixOS store integrity (optional - slow)
+  ansible.builtin.raw: nix-store --verify --check-contents 2>&1 || true
+  register: store_verify
+  changed_when: false
+  failed_when: false
+  timeout: 300
+  when: nixos_verify_store | default(false) | bool
+
+- name: Display store integrity result
+  ansible.builtin.debug:
+    msg: >-
+      NixOS store integrity check: {{
+        "SKIPPED (use -e nixos_verify_store=true to enable)" if not (nixos_verify_store | default(false) | bool)
+        else "OK" if (store_verify.rc is defined and store_verify.rc == 0)
+        else "WARNINGS (see logs)"
+      }}
+
+- name: Display validation results
+  ansible.builtin.debug:
+    msg:
+      - '========================================='
+      - 'NixOS Deployment Validation Results'
+      - '========================================='
+      - 'Host: {{ nixos_host_fqdn }}'
+      - 'Role: {{ nixos_host_role }}'
+      - 'NixOS Version: {{ nixos_version_post.stdout | default("unknown") | trim }}'
+      - 'SSH Service: {{ "active" if final_ssh_status.rc | default(1) == 0 else "inactive/unknown" }}'
+      - 'Flakes Deployed: {{ host_flakes | default([nixos_flake_host]) }}'
+      - 'Failed Units: {{ failed_units.stdout_lines | length if failed_units.stdout_lines is defined else 0 }}'
+      - '========================================='

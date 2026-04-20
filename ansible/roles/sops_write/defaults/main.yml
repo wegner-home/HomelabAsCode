@@ -1,0 +1,30 @@
+---
+# defaults file for sops_write role
+#
+# Drop-in replacement for vault_nix — persists runtime-generated secrets
+# to a SOPS/age-encrypted YAML file instead of Ansible Vault JSON.
+#
+# Callers set `new_secrets` (dict) as a fact before including this role,
+# exactly as they did with vault_nix. The merge strategy is identical:
+# combine(existing, new_secrets, recursive=True) — existing keys are
+# preserved, new keys are added.
+
+# Path to the SOPS-encrypted YAML file to write to.
+# In Phase 2 this will default to the per-environment runtime secrets file.
+# For now, fall back to a sensible project-level default.
+sops_write_file: '{{ global_sops_runtime_file | default(playbook_dir + "/../config/secrets/runtime_secrets.sops.yaml") }}'
+
+# Path to the age private key file on the controller.
+# Used for both decrypting (read) and encrypting (write).
+# Reuses the same variable the project already defines in inventory.
+sops_write_age_keyfile: "{{ global_sops_key_path }}"
+
+# Age public key(s) to encrypt for.
+# Must be a list. At minimum, include the admin key so the operator can
+# decrypt the file. Additional host keys can be appended by callers.
+sops_write_age_recipients:
+  - '{{ global_sops_admin_age_key | default("") }}'
+
+# Whether to force-overwrite the SOPS file even if content hasn't changed.
+# Default false — let community.sops.sops_encrypt handle idempotency.
+sops_write_force: false

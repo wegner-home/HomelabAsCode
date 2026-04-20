@@ -1,0 +1,118 @@
+---
+# Phase 3: Apply machine configs to control plane and worker nodes
+# Supports single-node and multi-node clusters, idempotent.
+
+# ===============================================
+# Check Current Node State
+# ===============================================
+- name: Check if nodes already have config applied
+  ansible.builtin.command: >
+    talosctl get machinestatus
+    --talosconfig {{ talos_output_dir }}/talosconfig
+    --nodes {{ item }}
+  loop: '{{ talos_all_node_ips }}'
+  loop_control:
+    label: '{{ item }}'
+  register: _node_status
+  changed_when: false
+  failed_when: false
+
+- name: Classify nodes by config state
+  ansible.builtin.set_fact:
+    _unconfigured_cp_nodes: >-
+      {{ talos_controlplane_ips | select('in',
+           _node_status.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list
+         ) | list }}
+    _unconfigured_worker_nodes: >-
+      {{ talos_worker_ips | select('in',
+           _node_status.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list
+         ) | list }}
+    _configured_nodes: >-
+      {{ _node_status.results | selectattr('rc', 'eq', 0) | map(attribute='item') | list }}
+
+- name: Display node classification
+  ansible.builtin.debug:
+    msg:
+      - 'Already configured: {{ _configured_nodes | join(", ") if _configured_nodes | length > 0 else "none" }}'
+      - 'Unconfigured CP nodes: {{ _unconfigured_cp_nodes | join(", ") if _unconfigured_cp_nodes | length > 0 else "none" }}'
+      - 'Unconfigured worker nodes: {{ _unconfigured_worker_nodes | join(", ") if _unconfigured_worker_nodes | length > 0 else "none" }}'
+
+# ===============================================
+# Apply Control Plane Configs
+# ===============================================
+- name: Apply config to unconfigured control plane nodes
+  ansible.builtin.command: >
+    talosctl apply-config
+    --nodes {{ item }}
+    --file {{ talos_controlplane_config_path }}
+    --insecure
+  loop: '{{ _unconfigured_cp_nodes }}'
+  loop_control:
+    label: 'CP: {{ item }}'
+  register: _cp_apply
+  when: _unconfigured_cp_nodes | length > 0
+
+- name: Re-apply config to configured control plane nodes (upgrade mode)
+  ansible.builtin.command: >
+    talosctl apply-config
+    --talosconfig {{ talos_output_dir }}/talosconfig
+    --nodes {{ item }}
+    --file {{ talos_controlplane_config_path }}
+  loop: '{{ talos_controlplane_ips | intersect(_configured_nodes) }}'
+  loop_control:
+    label: 'CP upgrade: {{ item }}'
+  when: talos_bootstrap_mode == 'upgrade'
+
+# ===============================================
+# Apply Worker Configs
+# ===============================================
+- name: Apply config to unconfigured worker nodes
+  ansible.builtin.command: >
+    talosctl apply-config
+    --nodes {{ item }}
+    --file {{ talos_worker_config_path }}
+    --insecure
+  loop: '{{ _unconfigured_worker_nodes }}'
+  loop_control:
+    label: 'Worker: {{ item }}'
+  register: _worker_apply
+  when:
+    - talos_worker_count | int > 0
+    - _unconfigured_worker_nodes | length > 0
+
+- name: Re-apply config to configured worker nodes (upgrade mode)
+  ansible.builtin.command: >
+    talosctl apply-config
+    --talosconfig {{ talos_output_dir }}/talosconfig
+    --nodes {{ item }}
+    --file {{ talos_worker_config_path }}
+  loop: '{{ talos_worker_ips | intersect(_configured_nodes) }}'
+  loop_control:
+    label: 'Worker upgrade: {{ item }}'
+  when:
+    - talos_bootstrap_mode == 'upgrade'
+    - talos_worker_count | int > 0
+
+# ===============================================
+# Wait for Configs to Take Effect
+# ===============================================
+- name: Wait for nodes to finish applying config
+  ansible.builtin.command: >
+    talosctl get machinestatus
+    --talosconfig {{ talos_output_dir }}/talosconfig
+    --nodes {{ item }}
+  loop: '{{ talos_all_node_ips }}'
+  loop_control:
+    label: '{{ item }}'
+  register: _apply_wait
+  until: _apply_wait.rc == 0
+  retries: '{{ (talos_wait_timeout | int / talos_wait_delay | int) | int }}'
+  delay: '{{ talos_wait_delay }}'
+  changed_when: false
+
+- name: Display apply results
+  ansible.builtin.debug:
+    msg:
+      - '--- Config Apply Complete ---'
+      - 'Control plane nodes configured: {{ talos_controlplane_ips | join(", ") }}'
+      - 'Worker nodes configured: {{ talos_worker_ips | join(", ") if talos_worker_count | int > 0 else "none (single-node)" }}'

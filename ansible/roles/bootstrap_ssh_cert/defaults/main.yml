@@ -1,0 +1,11 @@
+---
+# All paths derived from global_ssh_* (set in group_vars/all/)
+bootstrap_ssh_cert_host_key_path: '{{ global_ssh_host_cert_dir }}/{{ ansible_fqdn }}/ssh_host_ed25519_key'
+bootstrap_ssh_cert_host_pub_key_path: '{{ global_ssh_host_cert_dir }}/{{ ansible_fqdn }}/ssh_host_ed25519_key.pub'
+bootstrap_ssh_cert_ca_server: '{{ global_ssh_ca_server }}'
+bootstrap_ssh_cert_ca_base_dir: '{{ global_ssh_ca_base_dir }}'
+bootstrap_ssh_cert_ca_key_name: '{{ global_ssh_ca_key_name }}'
+bootstrap_ssh_cert_host_cert_dir: '{{ global_ssh_host_cert_dir }}/{{ ansible_fqdn }}'
+bootstrap_ssh_cert_host_cert: '{{ bootstrap_ssh_cert_host_cert_dir }}/ssh_host_ed25519_key-cert.pub'
+bootstrap_ssh_cert_service_group: '{{ global_group }}'
+bootstrap_ssh_cert_admin_group: '{{ global_admin_group }}'

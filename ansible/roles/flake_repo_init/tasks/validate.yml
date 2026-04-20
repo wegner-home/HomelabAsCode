@@ -1,0 +1,51 @@
+---
+# Validate NixOS flake configuration
+
+- name: Run nix flake check (no build)
+  ansible.builtin.command:
+    cmd: nix flake check --no-build
+    chdir: '{{ nix_flake_repo_path }}'
+  register: flake_check_result
+  changed_when: false
+  failed_when: false
+
+- name: Display validation results (success)
+  ansible.builtin.debug:
+    msg:
+      - '✓ Flake validation passed'
+      - '  All configurations are valid'
+  when: flake_check_result.rc == 0
+
+- name: Display validation results (failure)
+  ansible.builtin.debug:
+    msg:
+      - '✗ Flake validation failed'
+      - "  Run 'nix flake check --show-trace' for details"
+      - ''
+      - '  Common issues:'
+      - '    - Syntax errors in .nix files'
+      - '    - Missing imports'
+      - '    - Undefined variables'
+  when: flake_check_result.rc != 0
+
+- name: Display flake metadata
+  ansible.builtin.command:
+    cmd: nix flake show --json
+    chdir: '{{ nix_flake_repo_path }}'
+  register: flake_show_result
+  changed_when: false
+  failed_when: false
+
+- name: Parse flake configurations
+  ansible.builtin.set_fact:
+    flake_configs: '{{ (flake_show_result.stdout | from_json).nixosConfigurations | default({}) | list }}'
+  when: flake_show_result.rc == 0
+
+- name: Display available configurations
+  ansible.builtin.debug:
+    msg:
+      - 'Available NixOS configurations:'
+      - "{{ flake_configs | join(', ') }}"
+  when:
+    - flake_show_result.rc == 0
+    - flake_configs | length > 0

@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: Creates Proxmox VM templates from cloud images, local files, or NixOS builds, with optional cloud-init snippets
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+
+dependencies: []

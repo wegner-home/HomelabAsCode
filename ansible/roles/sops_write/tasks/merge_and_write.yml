@@ -1,0 +1,38 @@
+---
+# merge_and_write.yml — Merge new_secrets into existing data and SOPS-encrypt
+#
+# Expects:
+#   _sops_write_existing (dict) — set by read_existing.yml
+#   new_secrets (dict)          — set by the caller before including this role
+#
+# All tasks delegate to localhost since the SOPS file lives on the controller.
+
+- name: Merge new secrets into existing data (preserve existing keys)
+  delegate_to: localhost
+  become: false
+  ansible.builtin.set_fact:
+    _sops_write_merged: >-
+      {{ _sops_write_existing | default({}) | combine(new_secrets, recursive=True) }}
+  no_log: true
+
+- name: Ensure target directory exists
+  delegate_to: localhost
+  become: false
+  ansible.builtin.file:
+    path: '{{ sops_write_file | dirname }}'
+    state: directory
+    mode: '0700'
+
+- name: Encrypt and write merged secrets to SOPS file
+  delegate_to: localhost
+  become: false
+  community.sops.sops_encrypt:
+    path: '{{ sops_write_file }}'
+    content_yaml: '{{ _sops_write_merged }}'
+    age: '{{ sops_write_age_recipients | select() | list }}'
+    age_keyfile: '{{ sops_write_age_keyfile }}'
+    force: '{{ sops_write_force }}'
+    mode: '0600'
+  environment:
+    SOPS_AGE_KEY_FILE: '{{ sops_write_age_keyfile }}'
+  no_log: true

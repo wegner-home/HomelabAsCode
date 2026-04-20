@@ -1,0 +1,16 @@
+---
+# meta file for blueprint_repo role
+galaxy_info:
+  author: Philipp Wegner
+  description: Generic role to generate git repositories from blueprint templates
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+    - name: Ubuntu
+      versions:
+        - jammy
+
+dependencies: []

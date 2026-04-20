@@ -1,0 +1,43 @@
+---
+# Main tasks file for sops_age role
+
+- name: Resolve file owner for localhost operations
+  ansible.builtin.set_fact:
+    _resolved_owner: '{{ ansible_env.SUDO_USER | default(ansible_user_id, true) }}'
+
+- name: Display SOPS/age setup information
+  ansible.builtin.debug:
+    msg: 'Setting up SOPS/age secret management'
+
+# ==============================================
+# Controller/Localhost SOPS Setup
+# Only runs when inventory_hostname is literally 'localhost'
+# ==============================================
+- name: Include age key setup tasks (localhost)
+  ansible.builtin.include_tasks: age_key.yml
+  when: inventory_hostname == 'localhost'
+  tags:
+    - age
+    - secrets
+    - localhost
+
+- name: Include SOPS configuration tasks (localhost)
+  ansible.builtin.include_tasks: sops_config.yml
+  when: inventory_hostname == 'localhost'
+  tags:
+    - sops
+    - secrets
+    - localhost
+
+# ==============================================
+# Remote Host SOPS Setup
+# ==============================================
+- name: Include remote host SOPS setup
+  ansible.builtin.include_tasks: remote_host.yml
+  when:
+    - inventory_hostname != 'localhost'
+    - sops_age_remote_enable | bool
+  tags:
+    - sops
+    - secrets
+    - remote

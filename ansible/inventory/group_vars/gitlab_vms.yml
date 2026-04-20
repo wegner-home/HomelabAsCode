@@ -1,0 +1,135 @@
+---
+# Group variables for GitLab VMs
+
+host_role: gitlab
+host_sops_enable: true
+host_ssh_ca_enable: false
+
+gitlab_edition: "ce"
+gitlab_domain: "{{ global_domain }}"
+gitlab_ssl_enable: true
+gitlab_ssl_self_signed: True
+
+gitlab_enable_registry: True
+gitlab_registry_port: 5050
+gitlab_enable_lfs: true
+gitlab_enable_pages: False
+
+gitlab_runner_enable: False
+gitlab_runner_count: 2
+gitlab_runner_executor: "docker"
+gitlab_runner_tags:
+  - docker
+  - "{{ project_name }}"
+  - nix
+
+gitlab_api_bootstrap_enable: true
+gitlab_groups:
+  - name: "{{ global_gitlab_flake_repo_namespace }}"
+    path: "{{ global_gitlab_flake_repo_namespace }}"
+    description: "NixOS flake configurations"
+    visibility: "private"
+  - name: "{{ project_name }}"
+    path: "{{ project_name }}"
+    description: "{{ project_name }} infrastructure and automation"
+    visibility: "private"
+  - name: "infrastructure"
+    path: "infrastructure"
+    description: "Infrastructure as Code repositories"
+    visibility: "private"
+  - name: "testing"
+    path: "testing"
+    description: "Testing and development projects"
+    visibility: "internal"
+
+gitlab_projects:
+  - name: "{{ global_gitlab_flake_repo_name }}"
+    namespace: "{{ global_gitlab_flake_repo_namespace }}"
+    description: "NixOS flake configurations for {{ project_name }}"
+    visibility: "private"
+    initialize_with_readme: false
+    local_path: "{{ nix_flake_repo_path }}"
+    owner: "ansible"
+  - name: "k8s"
+    namespace: "infrastructure"
+    description: "FluxCD GitOps repository for Kubernetes"
+    visibility: "private"
+    initialize_with_readme: false
+    local_path: "{{ global_iac_root }}/repos/k8s"
+    owner: "ansible"
+  - name: "docker-compose"
+    namespace: "infrastructure"
+    description: "Docker Compose service definitions"
+    visibility: "private"
+    initialize_with_readme: false
+    local_path: "{{ global_iac_root }}/repos/docker-compose"
+    owner: "ansible"
+
+gitlab_users:
+  - username: "{{ global_service_user }}"
+    email: "{{ global_service_user }}@{{ global_domain }}"
+    name: "Ansible Service Account"
+    admin: false
+    projects_limit: 100
+    groups:
+      - group: "{{ project_name }}"
+        access_level: 30
+      - group: "infrastructure"
+        access_level: 30
+    ssh_keys:
+      - title: "{{ global_service_user }} - {{ project_name }} ed25519"
+        key: "{{ lookup('file', global_ssh_user_cert_dir + '/' + global_service_user + '/id_ed25519.pub') }}"
+  - username: "{{ global_admin_user }}"
+    email: "{{ global_admin_user }}@{{ global_domain }}"
+    name: "{{ project_name }} Admin"
+    admin: true
+    projects_limit: 0
+    groups:
+      - group: "{{ project_name }}"
+        access_level: 50
+      - group: "infrastructure"
+        access_level: 50
+    ssh_keys:
+      - title: "{{ global_admin_user }} - {{ project_name }} ed25519"
+        key: "{{ lookup('file', global_ssh_user_cert_dir + '/' + global_admin_user + '/id_ed25519.pub') }}"
+
+gitlab_puma_worker_processes: 2
+gitlab_sidekiq_concurrency: 10
+
+gitlab_backup_enable: true
+gitlab_backup_schedule: "03:00"
+gitlab_backup_retention: 7
+gitlab_backup_paths:
+  - "/var/opt/gitlab/backups"
+  - "/etc/gitlab"
+  - "/var/opt/gitlab/.ssh"
+
+gitlab_enable_prometheus: True
+gitlab_enable_node_exporter: true
+gitlab_prometheus_port: 9090
+gitlab_node_exporter_port: 9100
+
+gitlab_firewall_allowed_tcp_ports:
+  - 22
+  - 80
+  - 443
+  - 5050
+  - 9090
+  - 9100
+
+gitlab_db_type: "postgresql"
+gitlab_db_host: "localhost"
+gitlab_db_port: 5432
+gitlab_db_name: "gitlabhq_production"
+gitlab_db_username: "gitlab"
+
+gitlab_redis_host: "localhost"
+gitlab_redis_port: 6379
+
+gitlab_email_enabled: false
+gitlab_email_from: "gitlab@{{ global_domain }}"
+gitlab_email_display_name: "GitLab"
+
+gitlab_ldap_enabled: false
+# NOTE: system_timezone, system_locale, system_keymap, enable_debug_logging,
+#       test_mode centralized in group_vars/all/system.yml

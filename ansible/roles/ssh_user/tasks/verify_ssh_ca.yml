@@ -1,0 +1,41 @@
+---
+# Verify SSH CA exists (created by bootstrap_localhost role)
+
+- name: Check if User CA key pair exists
+  ansible.builtin.stat:
+    path: '{{ ssh_user_user_ca_dir }}/{{ ssh_user_user_ca_key_name }}'
+  register: ssh_user_ca_key_check
+
+- name: Fail if User CA does not exist
+  ansible.builtin.fail:
+    msg: |
+      SSH User CA not found at {{ ssh_user_user_ca_dir }}/{{ ssh_user_user_ca_key_name }}
+      The SSH CAs should be created by the bootstrap_localhost role first.
+      Please run the bootstrap_localhost role before ssh_user.
+
+      Expected directory structure:
+        {{ ssh_user_ssh_base_dir }}/
+        ├── ca/
+        │   ├── user/{{ ssh_user_user_ca_key_name }}
+        │   └── host/{{ ssh_user_host_ca_key_name }}
+        └── users/
+  when: not ssh_user_ca_key_check.stat.exists
+
+- name: Check if Host CA key pair exists
+  ansible.builtin.stat:
+    path: '{{ ssh_user_host_ca_dir }}/{{ ssh_user_host_ca_key_name }}'
+  register: ssh_host_ca_key_check
+
+- name: Warn if Host CA does not exist
+  ansible.builtin.debug:
+    msg: |
+      WARNING: SSH Host CA not found at {{ ssh_user_host_ca_dir }}/{{ ssh_user_host_ca_key_name }}
+      Host certificate signing will not be available.
+  when: not ssh_host_ca_key_check.stat.exists
+
+- name: Display SSH CA verification
+  ansible.builtin.debug:
+    msg:
+      - 'SSH CAs verified:'
+      - '  User CA: {{ ssh_user_user_ca_dir }}/{{ ssh_user_user_ca_key_name }}'
+      - '  Host CA: {{ ssh_user_host_ca_dir }}/{{ ssh_user_host_ca_key_name }} {{ "(missing)" if not ssh_host_ca_key_check.stat.exists else "" }}'

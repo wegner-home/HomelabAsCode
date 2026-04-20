@@ -1,0 +1,32 @@
+---
+# SOPS configuration setup tasks
+
+- name: Check if SOPS config exists
+  ansible.builtin.stat:
+    path: '{{ sops_age_sops_config }}'
+  register: sops_config_stat
+
+- name: Create SOPS configuration from template
+  ansible.builtin.template:
+    src: sops.yaml.j2
+    dest: '{{ sops_age_sops_config }}'
+    mode: '0644'
+  when:
+    - sops_age_create_sops_config
+    - not sops_config_stat.stat.exists
+    - sops_age_public_key is defined
+
+- name: Display SOPS config location
+  ansible.builtin.debug:
+    msg: 'SOPS configuration is at: {{ sops_age_sops_config }}'
+  when: sops_config_stat.stat.exists or sops_age_create_sops_config
+
+- name: Verify SOPS is available
+  ansible.builtin.command: which sops
+  register: sops_check
+  changed_when: false
+  failed_when: false
+
+- name: Display SOPS availability
+  ansible.builtin.debug:
+    msg: "{{ 'SOPS is available at: ' + sops_check.stdout if sops_check.rc == 0 else 'WARNING: SOPS is not installed. Please add it to your NixOS configuration.' }}"

@@ -1,0 +1,29 @@
+---
+# Stage 0: Bootstrap localhost (NixOS)
+# This playbook bootstraps the localhost environment for management
+# using NixOS. It sets up directory structures, user accounts, SSH keys,
+# SOPS/age encryption
+
+- name: Stage 0 - Bootstrap localhost (NixOS)
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tags:
+    - stage_0
+    - bootstrap
+    - localhost
+
+  pre_tasks:
+    - name: Load and merge vault secrets
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/helpers/load_vaults.yml"
+
+  roles:
+    - role: bootstrap_localhost
+      tags: ["bootstrap", "localhost", "directories", "users"]
+
+    - role: ssh_user
+      tags: ["ssh", "ssh_keys", "ssh_ca"]
+
+    - role: sops_age
+      tags: ["sops", "age", "secrets", "vault"]

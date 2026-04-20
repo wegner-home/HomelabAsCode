@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: phil
+  description: Generate per-VM cloud-init snippets from inventory host_vars
+  license: MIT
+  min_ansible_version: '2.15'
+  platforms:
+    - name: Debian
+      versions:
+        - all
+
+dependencies: []

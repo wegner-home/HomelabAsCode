@@ -1,0 +1,55 @@
+---
+# Initialize GitLab repositories from definitions
+# Loops over gitlab_projects and pushes content if local_path is defined
+
+- name: Display repository initialization info
+  ansible.builtin.debug:
+    msg:
+      - 'Initializing GitLab repositories from definition'
+      - 'GitLab API URL: {{ gitlab_api_url }}'
+      - 'Projects count: {{ gitlab_projects | default([]) | length }}'
+
+- name: Ensure GitLab is ready for API calls
+  ansible.builtin.uri:
+    url: '{{ gitlab_api_url }}/api/v4/version'
+    method: GET
+    validate_certs: '{{ gitlab_ssl_verify }}'
+    return_content: true
+    status_code: [200, 401]
+  register: gitlab_api_check
+  retries: 12
+  delay: 10
+  until: gitlab_api_check.status in [200, 401]
+  when: gitlab_projects | default([]) | length > 0
+
+- name: Create temporary directory for git operations
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: _gitlab_repos
+  register: temp_git_dir
+  delegate_to: localhost
+  when: gitlab_projects | default([]) | length > 0
+
+# Initialize each repository
+- name: Initialize repositories with content
+  include_tasks: init_single_repo.yml
+  loop: '{{ gitlab_projects | default([]) }}'
+  loop_control:
+    loop_var: project_item
+  when:
+    - gitlab_projects | default([]) | length > 0
+    - project_item.local_path is defined
+
+- name: Clean up temporary directory
+  ansible.builtin.file:
+    path: '{{ temp_git_dir.path }}'
+    state: absent
+  when: temp_git_dir is defined
+  delegate_to: localhost
+
+- name: Display completion message
+  ansible.builtin.debug:
+    msg:
+      - '================================================'
+      - 'Repository Initialization Complete!'
+      - '================================================'

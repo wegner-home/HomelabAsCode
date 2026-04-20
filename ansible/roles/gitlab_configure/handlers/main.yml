@@ -1,0 +1,8 @@
+---
+# Handlers for gitlab_configure role
+
+- name: restart_gitlab
+  ansible.builtin.systemd:
+    name: gitlab.service
+    state: restarted
+  listen: restart_gitlab

@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: phil
+  description: Build NixOS cloud images using nixos-generators for Proxmox templates
+  license: MIT
+  min_ansible_version: '2.15'
+  platforms:
+    - name: NixOS
+      versions:
+        - all
+
+dependencies: []

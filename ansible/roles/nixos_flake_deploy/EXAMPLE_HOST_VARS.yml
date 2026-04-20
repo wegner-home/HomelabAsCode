@@ -1,0 +1,142 @@
+---
+# Example host_vars configurations for nixos_flake_deploy role
+# Place these in inventory/staging/host_vars/<hostname>.yml
+
+# ========================================
+# EXAMPLE 1: Admin/Jumphost Server
+# ========================================
+# inventory/staging/host_vars/admin.yml
+---
+# Deploy multiple flakes
+host_flakes:
+  - 'admin'
+  - 'monitoring'
+
+host_role: 'admin'
+
+# NOTE: SSH CA and SOPS are now separate roles
+# Use ssh_ca role with: host_ssh_ca_enable: true
+# Use sops_age role with: host_sops_enable: true
+
+# Flake repository (or set global_nixos_flake_repo in group_vars)
+# nixos_flake_repo: 'github:myuser/{{ project_name }}-nixos-flakes'
+
+# Management packages for admin host
+host_packages:
+  - ansible
+  - terraform
+  - kubectl
+  - k9s
+  - helm
+  - fluxcd
+  - age
+  - sops
+  - neovim
+  - tmux
+  - btop
+  - ripgrep
+  - fd
+  - jq
+  - yq
+
+# Additional admin users
+host_users:
+  - name: '<your-username>'
+    description: 'Admin user'
+    groups: ['wheel']
+    ssh_authorized_keys:
+      - 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... <your-username>@workstation'
+
+# Enable monitoring
+host_enable_node_exporter: true
+
+# Firewall - allow SSH and monitoring
+host_firewall_tcp_ports: []
+
+# ========================================
+# EXAMPLE 2: GitLab Server
+# ========================================
+# inventory/staging/host_vars/gitlab.yml
+---
+# Can use dict format to override repo per-flake
+host_flakes:
+  - name: 'gitlab'
+    repo: 'github:myuser/gitlab-nixos-flake'
+
+host_role: 'gitlab'
+
+# GitLab-specific packages
+host_packages:
+  - git
+  - vim
+  - postgresql
+
+# GitLab ports
+host_firewall_tcp_ports:
+  - 80
+  - 443
+  - 22
+
+# GitLab might use Docker for CI runners
+host_enable_docker: true
+
+# ========================================
+# EXAMPLE 3: Docker Host
+# ========================================
+# inventory/staging/host_vars/docker01.yml
+---
+host_flakes:
+  - 'docker-host'
+  - 'monitoring'
+
+host_role: 'docker'
+
+# Docker-specific packages
+host_packages:
+  - ctop
+  - docker-compose
+
+# Enable Docker
+host_enable_docker: true
+
+# Expose Docker-related ports
+host_firewall_tcp_ports:
+#  - 8080 # Portainer
+#  - 9000 # Traefik dashboard
+
+# ========================================
+# EXAMPLE 4: Multi-Purpose Host
+# ========================================
+# inventory/staging/host_vars/app-server.yml
+---
+# Deploy multiple flakes with mixed options
+host_flakes:
+  - 'base' # From default repo
+  - 'docker' # From default repo
+  - name: 'custom-app' # Different repo
+    repo: 'github:myuser/custom-app-nix'
+  - name: 'local-config' # Deploy from templates
+    deploy_from_repo: false
+
+host_role: 'app'
+host_enable_docker: true
+
+host_packages:
+  - nodejs
+  - yarn
+
+host_firewall_tcp_ports:
+  - 3000
+  - 8080
+
+# ========================================
+# EXAMPLE 5: Minimal/Generic Host
+# ========================================
+# inventory/staging/host_vars/generic01.yml
+---
+# Simple single-flake deployment
+host_flakes:
+  - 'generic'
+
+host_role: 'generic'
+# Uses all defaults

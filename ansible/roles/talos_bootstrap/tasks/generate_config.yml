@@ -1,0 +1,170 @@
+---
+# Phase 2: Talos secrets and machine config generation
+# Runs talosctl gen secrets + gen config with patches.
+
+# ===============================================
+# Generate Talos Secrets (idempotent)
+# ===============================================
+- name: Check if Talos secrets already exist
+  ansible.builtin.stat:
+    path: "{{ talos_secrets_path }}"
+  register: _talos_secrets_stat
+
+- name: Generate Talos secrets bundle
+  ansible.builtin.command: >
+    talosctl gen secrets
+    --output-file {{ talos_secrets_path }}
+  when: not _talos_secrets_stat.stat.exists
+  register: _talos_gen_secrets
+
+- name: Display secrets status
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Secrets generated: ' + talos_secrets_path
+         if _talos_gen_secrets is changed
+         else 'Secrets already exist: ' + talos_secrets_path + ' (skipped)' }}
+
+# ===============================================
+# Render Config Patches from Templates
+# ===============================================
+- name: Create temporary patch directory
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: talos_patches_
+  register: _patch_dir
+
+# -- Patches applied to ALL nodes (controlplane + worker) --
+
+- name: Render Cilium CNI patch (all nodes)
+  ansible.builtin.template:
+    src: patches/cilium.yaml.j2
+    dest: "{{ _patch_dir.path }}/cilium.yaml"
+    mode: "0600"
+  when: talos_patch_cilium | bool
+
+- name: Render Longhorn kernel modules patch (all nodes)
+  ansible.builtin.template:
+    src: patches/longhorn.yaml.j2
+    dest: "{{ _patch_dir.path }}/longhorn.yaml"
+    mode: "0600"
+  when: talos_patch_longhorn | bool
+
+- name: Render kubelet patch (all nodes)
+  ansible.builtin.template:
+    src: patches/kubelet.yaml.j2
+    dest: "{{ _patch_dir.path }}/kubelet.yaml"
+    mode: "0600"
+  when: talos_patch_kubelet | bool
+
+- name: Render system extensions patch (all nodes)
+  ansible.builtin.template:
+    src: patches/extensions.yaml.j2
+    dest: "{{ _patch_dir.path }}/extensions.yaml"
+    mode: "0600"
+  when: talos_patch_extensions | bool
+
+# -- Patches applied to CONTROL PLANE nodes only --
+
+- name: Render kube-vip patch (control plane only)
+  ansible.builtin.template:
+    src: patches/kubevip.yaml.j2
+    dest: "{{ _patch_dir.path }}/kubevip.yaml"
+    mode: "0600"
+  when: talos_patch_kubevip | bool
+
+- name: Render scheduling patch (control plane only)
+  ansible.builtin.template:
+    src: patches/scheduling.yaml.j2
+    dest: "{{ _patch_dir.path }}/scheduling.yaml"
+    mode: "0600"
+  when: talos_patch_scheduling | bool
+
+# ===============================================
+# Build Patch Arguments
+# ===============================================
+
+# Patches for all nodes (--config-patch)
+- name: Build common patch arguments
+  ansible.builtin.set_fact:
+    _common_patches: >-
+      {{ (talos_patch_cilium | bool) | ternary('--config-patch @' + _patch_dir.path + '/cilium.yaml', '') }}
+      {{ (talos_patch_longhorn | bool) | ternary('--config-patch @' + _patch_dir.path + '/longhorn.yaml', '') }}
+      {{ (talos_patch_kubelet | bool) | ternary('--config-patch @' + _patch_dir.path + '/kubelet.yaml', '') }}
+      {{ (talos_patch_extensions | bool) | ternary('--config-patch @' + _patch_dir.path + '/extensions.yaml', '') }}
+
+# Patches for control plane only (--config-patch-control-plane)
+- name: Build control plane patch arguments
+  ansible.builtin.set_fact:
+    _cp_patches: >-
+      {{ (talos_patch_kubevip | bool) | ternary('--config-patch-control-plane @' + _patch_dir.path + '/kubevip.yaml', '') }}
+      {{ (talos_patch_scheduling | bool) | ternary('--config-patch-control-plane @' + _patch_dir.path + '/scheduling.yaml', '') }}
+
+# ===============================================
+# Generate Machine Configs
+# ===============================================
+- name: Generate Talos machine configs
+  ansible.builtin.command: >
+    talosctl gen config
+    {{ talos_cluster_name }}
+    {{ talos_cluster_endpoint }}
+    --output {{ talos_output_dir }}
+    --output-types controlplane,worker,talosconfig
+    --with-secrets {{ talos_secrets_path }}
+    --kubernetes-version {{ talos_kubernetes_version }}
+    --talos-version {{ talos_version }}
+    --force
+    {{ _common_patches }}
+    {{ _cp_patches }}
+  register: _talos_gen_config
+
+- name: Display generated config files
+  ansible.builtin.debug:
+    msg:
+      - "Machine configs generated:"
+      - "  controlplane: {{ talos_output_dir }}/controlplane.yaml"
+      - "  worker:       {{ talos_output_dir }}/worker.yaml"
+      - "  talosconfig:  {{ talos_output_dir }}/talosconfig"
+
+# ===============================================
+# SOPS Encryption (optional)
+# ===============================================
+- name: SOPS-encrypt secrets bundle
+  ansible.builtin.command: >
+    sops --encrypt --in-place {{ talos_secrets_path }}
+  when:
+    - talos_sops_encrypt | bool
+    - _talos_gen_secrets is changed
+    - _sops_version.rc | default(1) == 0
+  register: _sops_encrypt
+  failed_when: false
+
+- name: Display SOPS encryption status
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Secrets encrypted with SOPS' if (_sops_encrypt is changed)
+         else 'SOPS encryption skipped'
+              + (' (secrets unchanged)' if _talos_secrets_stat.stat.exists else '')
+              + (' (sops not available)' if (_sops_version.rc | default(1)) != 0 else '') }}
+
+# ===============================================
+# Set Talosconfig Endpoint
+# ===============================================
+- name: Configure talosconfig with correct endpoints
+  ansible.builtin.command: >
+    talosctl config endpoints {{ talos_controlplane_ips | join(' ') }}
+    --talosconfig {{ talos_output_dir }}/talosconfig
+  changed_when: true
+
+- name: Configure talosconfig with node list
+  ansible.builtin.command: >
+    talosctl config nodes {{ talos_all_node_ips | join(' ') }}
+    --talosconfig {{ talos_output_dir }}/talosconfig
+  changed_when: true
+
+# ===============================================
+# Cleanup
+# ===============================================
+- name: Remove temporary patch directory
+  ansible.builtin.file:
+    path: "{{ _patch_dir.path }}"
+    state: absent

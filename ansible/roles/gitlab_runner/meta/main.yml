@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: Creates per-host GitLab Runner authentication tokens via the GitLab API and writes them to disk for the NixOS runner service
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: GenericLinux
+      versions:
+        - all
+
+dependencies: []

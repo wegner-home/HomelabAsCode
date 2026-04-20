@@ -1,0 +1,38 @@
+# Blueprint: docker-compose
+# Purpose: Generate Docker Compose repo with per-host stacks and GitLab CI pipeline
+# Host expansion: Uses _host_ pattern to create per-host directories
+
+name: docker-compose
+description: Docker Compose stacks repository with GitLab CI auto-deploy
+version: '1.0.0'
+
+# Variable source for host iteration
+# Only include hosts with nixos_template=docker-vm or nixos_role=docker
+host_source: global_nixos_vm_definitions
+host_filter: "nixos_role == 'docker' or nixos_template == 'docker-vm'"
+
+# Context variables passed to all templates
+context:
+  compose_base_dir: "{{ inventory_builder_docker_compose_default_base_dir | default('/opt/docker-compose') }}"
+  domain: "{{ global_domain | default('lan.wegner.cool') }}"
+
+# Directories to create
+directories:
+  - hosts
+
+# Static files configuration
+static:
+  sync_mode: ignore-existing
+  exclude:
+    - '.git'
+    - '*.bak'
+
+# Files that should never be overwritten
+static_preserve:
+  - 'hosts/*/docker-compose.yml'
+  - 'hosts/*/compose.yml'
+  - 'hosts/*/.env'
+
+# Optional hooks
+hooks:
+  post_generate: hooks/post.yml

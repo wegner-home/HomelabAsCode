@@ -1,0 +1,24 @@
+---
+- name: Set permissions for host private key
+  ansible.builtin.file:
+    path: '{{ bootstrap_ssh_cert_host_key_path }}'
+    owner: root
+    group: '{{ bootstrap_ssh_cert_service_group }}'
+    mode: '0600'
+  become: true
+
+- name: Set permissions for host public key
+  ansible.builtin.file:
+    path: '{{ bootstrap_ssh_cert_host_pub_key_path }}'
+    owner: root
+    group: '{{ bootstrap_ssh_cert_service_group }}'
+    mode: '0644'
+  become: true
+
+- name: Set permissions for host certificate
+  ansible.builtin.file:
+    path: '{{ bootstrap_ssh_cert_host_cert }}'
+    owner: root
+    group: '{{ bootstrap_ssh_cert_service_group }}'
+    mode: '0644'
+  become: true

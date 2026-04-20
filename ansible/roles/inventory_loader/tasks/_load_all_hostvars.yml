@@ -1,0 +1,87 @@
+---
+# Unified host_vars loader - replaces _load_nixos_vm_hostvars.yml and _load_talos_hostvars.yml
+# ========================================================================================
+# Scans a single host_vars file and aggregates ALL VM definitions into unified structures.
+#
+# Called from main.yml in a loop over host_vars files.
+# Workaround for Ansible 2.20 from_yaml data-tagging bug (uses include_vars).
+#
+# Input:
+#   _hostvar_file: dict with .path attribute (from ansible.builtin.find)
+#
+# Output (aggregated across all calls):
+#   inventory_builder_all_hosts: dict of ALL hosts with unified structure:
+#     {
+#       "adm-02": {
+#         "_vm_type": "nixos",
+#         "_nixos_role": "admin",
+#         "_source_file": "/path/to/host_vars/adm-02.yml",
+#         "vm_config": { ... original VM definition ... },
+#         "host_vars": { ... full host_vars content for templates ... }
+#       },
+#       "k8s-cp-01": {
+#         "_vm_type": "talos_cp",
+#         "_source_file": "/path/to/host_vars/k8s-cp-01.yml",
+#         "vm_config": { ... },
+#         "host_vars": { ... }
+#       }
+#     }
+#
+#   Convenience views (derived from inventory_builder_all_hosts):
+#   inventory_builder_nixos_vms:   dict of NixOS VMs only (vm_type=nixos)
+#   inventory_builder_talos_cp:    dict of Talos controlplane nodes
+#   inventory_builder_talos_worker: dict of Talos worker nodes
+
+- name: 'Load host_vars: {{ _hostvar_file.path | basename }}'
+  ansible.builtin.include_vars:
+    file: '{{ _hostvar_file.path }}'
+    name: _loaded_hv
+
+# -----------------------------------------------
+# Process global_nixos_vm_definitions (NixOS VMs)
+# -----------------------------------------------
+- name: 'Aggregate NixOS VMs from {{ _hostvar_file.path | basename }}'
+  ansible.builtin.set_fact:
+    inventory_builder_all_hosts: >-
+      {{ inventory_builder_all_hosts | combine({
+        item.key: {
+          '_vm_type': 'nixos',
+          '_nixos_role': item.value.nixos_role | default(omit),
+          '_source_file': _hostvar_file.path,
+          'vm_config': (global_vm_defaults | default({})) | combine(item.value),
+          'host_vars': _loaded_hv
+        }
+      }) }}
+  loop: '{{ _loaded_hv.global_nixos_vm_definitions | default({}) | dict2items }}'
+  loop_control:
+    label: '{{ item.key }} (nixos, role={{ item.value.nixos_role | default("standard") }})'
+  when: _loaded_hv.global_nixos_vm_definitions is defined
+
+# -----------------------------------------------
+# Process global_vm_definitions (Talos nodes)
+# -----------------------------------------------
+- name: 'Aggregate Talos nodes from {{ _hostvar_file.path | basename }}'
+  ansible.builtin.set_fact:
+    inventory_builder_all_hosts: >-
+      {{ inventory_builder_all_hosts | combine({
+        item.key: {
+          '_vm_type': ('talos_cp' if item.value.role == 'controlplane' else 'talos_worker'),
+          '_talos_role': item.value.role,
+          '_source_file': _hostvar_file.path,
+          'vm_config': item.value,
+          'host_vars': _loaded_hv
+        }
+      }) }}
+  loop: >-
+    {{ _loaded_hv.global_vm_definitions | default({}) | dict2items
+       | selectattr('value.role', 'defined')
+       | selectattr('value.role', 'in', ['controlplane', 'worker'])
+       | list }}
+  loop_control:
+    label: '{{ item.key }} (talos_{{ item.value.role }})'
+  when: >-
+    _loaded_hv.global_vm_definitions is defined and
+    (_loaded_hv.global_vm_definitions | default({}) | dict2items
+      | selectattr('value.role', 'defined')
+      | selectattr('value.role', 'in', ['controlplane', 'worker'])
+      | list | length > 0)

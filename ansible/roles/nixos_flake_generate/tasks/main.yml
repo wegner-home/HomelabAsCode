@@ -1,0 +1,57 @@
+---
+# tasks file for nixos_flake_generate role
+# Generates a NixOS Flakes repository via the blueprint_repo role.
+#
+# Blueprint flow:
+#   1. blueprint_repo syncs static files (modules/, profiles/, secrets/)
+#   2. blueprint_repo renders templates (flake.nix, per-host configuration.nix)
+#   3. blueprint post-hook renders role-specific modules (admin.nix, docker.nix, gitlab.nix)
+#   4. blueprint_repo git-inits and commits
+#
+# Prerequisites:
+#   inventory_builder_all_vms must be populated (by inventory_loader)
+
+- name: 'NixOS Flakes — Generate repository'
+  when:
+    - inventory_builder_generate_flakes | default(true)
+    - inventory_builder_all_vms is defined
+    - inventory_builder_all_vms | length > 0
+  block:
+    - name: Display NixOS Flakes generation info
+      ansible.builtin.debug:
+        msg:
+          - 'Generating NixOS Flakes repository via blueprint_repo role'
+          - 'Blueprint source: {{ inventory_builder_nix_blueprint_dir }}'
+          - 'Output: {{ inventory_builder_flakes_dir }}'
+          - 'Hosts: {{ inventory_builder_all_vms.keys() | list | join(", ") }}'
+      run_once: true
+
+    - name: Render nix-flakes blueprint
+      ansible.builtin.include_role:
+        name: blueprint_repo
+      vars:
+        blueprint_name: 'nix-flakes'
+        blueprint_source: '{{ inventory_builder_nix_blueprint_dir }}'
+        blueprint_output: '{{ inventory_builder_flakes_dir }}'
+        blueprint_env: '{{ inventory_builder_env }}'
+        blueprint_hosts: '{{ inventory_builder_all_vms }}'
+        blueprint_owner: '{{ inventory_builder_project_owner }}'
+        blueprint_group: '{{ inventory_builder_project_group }}'
+        blueprint_template_vars:
+          domain: '{{ global_domain }}'
+          default_gateway: '{{ global_default_gateway | default("10.0.0.1") }}'
+          dns_servers: '{{ global_dns_servers | default(["1.1.1.1", "8.8.8.8"]) }}'
+          subnets: '{{ opnsense_kea_subnets | default({}) }}'
+          nix_channel: 'nixos-{{ inventory_builder_nixos_version }}'
+          service_user: '{{ global_service_user | default("ansible") }}'
+          sops_age_public_key: '{{ global_sops_age_public_key | default("") }}'
+        blueprint_git_init: true
+        blueprint_git_commit: true
+        blueprint_debug: false
+
+    - name: Display NixOS Flakes generation summary
+      ansible.builtin.debug:
+        msg:
+          - 'NixOS Flakes repo generated: {{ inventory_builder_flakes_dir }}'
+          - 'Hosts: {{ inventory_builder_all_vms.keys() | list | join(", ") }}'
+      run_once: true

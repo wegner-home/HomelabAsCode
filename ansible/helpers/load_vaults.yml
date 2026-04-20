@@ -1,0 +1,36 @@
+---
+# Load secrets from SOPS-encrypted files (static + runtime)
+# This file should be included in playbooks/roles that need vault_secrets
+#
+# Merges two sources (runtime values override static):
+#   1. Static secrets:  secrets/<env>/secrets.sops.yaml        (vault_secrets key)
+#   2. Runtime secrets: secrets/<env>/runtime_secrets.sops.yaml (top-level keys)
+#
+# Requires:
+#   - SOPS_AGE_KEY_FILE environment variable set (or ~/.config/sops/age/keys.txt)
+#   - community.sops collection installed
+#
+# Usage in playbook:
+#   pre_tasks:
+#     - name: Load secrets
+#       ansible.builtin.include_tasks: helpers/load_vaults.yml
+#       tags: ['always']
+
+- name: Load static secrets from SOPS
+  ansible.builtin.set_fact:
+    vault_secrets: "{{ (lookup('community.sops.sops', global_sops_secrets_file, output_type='json') | from_json).vault_secrets | default({}) }}"
+  when: vault_secrets is not defined
+  # NOTE: community.sops lookup plugin reads sops_age_keyfile directly as a plugin variable,
+  # not from environment:. The variable name must match exactly (no underscore before 'file').
+  tags: ["always"]
+
+- name: Merge runtime secrets into vault_secrets
+  ansible.builtin.set_fact:
+    vault_secrets: >-
+      {{ vault_secrets | combine(
+           lookup('community.sops.sops', global_sops_runtime_file, output_type='json', empty_on_not_exist=true)
+           | default('{}', true) | from_json,
+           recursive=True
+         ) }}
+  when: global_sops_runtime_file is defined
+  tags: ["always"]

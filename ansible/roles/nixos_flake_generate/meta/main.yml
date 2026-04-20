@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: phil
+  description: >-
+    Generates a NixOS Flakes repository from Ansible inventory using the
+    blueprint_repo role. Renders flake.nix, per-host configuration.nix,
+    and role-specific modules (admin, docker, gitlab) via the
+    blueprints/nix-flakes/ blueprint.
+  license: MIT
+  min_ansible_version: '2.14'
+
+dependencies: []

@@ -1,0 +1,74 @@
+---
+# Shared Proxmox API user/role/token creation
+# ====================================================================
+# Creates a PVE API user, assigns a role with full privileges, and
+# generates an API token.  Saves the token to a vault-ready fact.
+#
+# Called from stage_1.yml with run_once: true — tokens are stored
+# under the 'cluster' key (proxmox.cluster.*) since they replicate
+# across all clustered nodes via pveum.
+
+- name: "API {{ _api_user_name }} | Check if user exists"
+  ansible.builtin.shell: pveum user list | grep -w '{{ _api_user_name }}@pve'
+  register: _api_user_check
+  ignore_errors: true
+  changed_when: false
+  become: true
+
+- name: "API {{ _api_user_name }} | Create user"
+  ansible.builtin.shell: pveum user add {{ _api_user_name }}@pve
+  when: _api_user_check.rc != 0
+  become: true
+
+- name: "API {{ _api_user_name }} | Check if role exists"
+  ansible.builtin.shell: pveum role list | grep -w '{{ _api_user_name }}'
+  register: _api_role_check
+  ignore_errors: true
+  changed_when: false
+  become: true
+
+- name: "API {{ _api_user_name }} | Create role"
+  ansible.builtin.shell: pveum role add {{ _api_user_name }} -privs "{{ bootstrap_proxmox_default_api_privs }}"
+  when: _api_role_check.rc != 0
+  become: true
+
+- name: "API {{ _api_user_name }} | Check if role is assigned to user"
+  ansible.builtin.shell: pveum acl list | grep -w '{{ _api_user_name }}@pve' | grep -w '{{ _api_user_name }}'
+  register: _api_acl_check
+  ignore_errors: true
+  changed_when: false
+  become: true
+
+- name: "API {{ _api_user_name }} | Assign role to user"
+  ansible.builtin.shell: pveum aclmod / -user {{ _api_user_name }}@pve -role {{ _api_user_name }}
+  when: _api_acl_check.rc != 0
+  become: true
+
+- name: "API {{ _api_user_name }} | Check if API token 'bootstrap' exists"
+  ansible.builtin.shell:
+    cmd: "pveum user token list {{ _api_user_name }}@pve | grep -q bootstrap"
+  register: _api_token_check
+  failed_when: false
+  changed_when: false
+  become: true
+
+- name: "API {{ _api_user_name }} | Create API token"
+  ansible.builtin.shell: pveum user token add {{ _api_user_name }}@pve bootstrap --privsep=0
+  register: _api_token_result
+  when: _api_token_check.rc != 0
+  become: true
+
+- name: "API {{ _api_user_name }} | Parse token ID and secret"
+  ansible.builtin.set_fact:
+    _api_parsed_token_id: "{{ (_api_token_result.stdout | regex_search('full-tokenid *│ ([^\\s]+)', '\\1') | first) }}"
+    _api_parsed_token_secret: "{{ (_api_token_result.stdout | regex_search('value *│ ([0-9a-f\\-]+)', '\\1') | first) }}"
+  when: _api_token_check.rc != 0
+
+- name: "API {{ _api_user_name }} | Save token to vault fact"
+  ansible.builtin.set_fact:
+    "{{ _api_vault_fact_name }}": >-
+      {{ {'proxmox': {'cluster': {
+        _api_vault_token_id_key: _api_parsed_token_id,
+        _api_vault_token_secret_key: _api_parsed_token_secret
+      }}} }}
+  when: _api_token_check.rc != 0

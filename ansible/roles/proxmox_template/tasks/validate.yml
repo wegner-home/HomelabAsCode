@@ -1,0 +1,68 @@
+---
+# Validate configuration before proceeding
+
+- name: Validate source_type value
+  ansible.builtin.assert:
+    that:
+      - proxmox_template_source_type in ['url', 'file', 'nixos_build']
+    fail_msg: "Invalid source_type '{{ proxmox_template_source_type }}'. Must be 'url', 'file', or 'nixos_build'"
+    success_msg: "Source type '{{ proxmox_template_source_type }}' is valid"
+
+- name: Validate URL source configuration
+  ansible.builtin.assert:
+    that:
+      - proxmox_template_image_url is defined
+      - proxmox_template_image_url | length > 0
+      - proxmox_template_image_url is match('^https?://')
+    fail_msg: "For source_type 'url', proxmox_template_image_url must be a valid HTTP/HTTPS URL"
+    success_msg: 'URL source configuration is valid'
+  when: proxmox_template_source_type == 'url'
+
+- name: Validate file source configuration
+  ansible.builtin.assert:
+    that:
+      - proxmox_template_image_file is defined
+      - proxmox_template_image_file | length > 0
+    fail_msg: "For source_type 'file', proxmox_template_image_file must be specified"
+    success_msg: 'File source configuration is valid'
+  when: proxmox_template_source_type == 'file'
+
+- name: Check if local image file exists
+  ansible.builtin.stat:
+    path: '{{ proxmox_template_image_file }}'
+  register: local_image_stat
+  delegate_to: localhost
+  when: proxmox_template_source_type == 'file'
+
+- name: Validate local image file exists
+  ansible.builtin.assert:
+    that:
+      - local_image_stat.stat.exists
+    fail_msg: 'Local image file not found: {{ proxmox_template_image_file }}'
+    success_msg: 'Local image file exists'
+  when: proxmox_template_source_type == 'file'
+
+- name: Validate NixOS build configuration
+  ansible.builtin.assert:
+    that:
+      - proxmox_template_nixos_version is defined
+      - proxmox_template_nixos_version | length > 0
+    fail_msg: "For source_type 'nixos_build', proxmox_template_nixos_version must be specified"
+    success_msg: 'NixOS build configuration is valid'
+  when: proxmox_template_source_type == 'nixos_build'
+
+- name: Validate VM ID is a number
+  ansible.builtin.assert:
+    that:
+      - proxmox_template_vm_id | int > 0
+      - proxmox_template_vm_id | int < 999999999
+    fail_msg: 'VM ID must be a positive integer'
+    success_msg: 'VM ID {{ proxmox_template_vm_id }} is valid'
+
+- name: Display validated configuration
+  ansible.builtin.debug:
+    msg:
+      - 'Configuration validated successfully'
+      - 'Source type: {{ proxmox_template_source_type }}'
+      - 'VM ID: {{ proxmox_template_vm_id }}'
+      - 'Template name: {{ proxmox_template_name }}'

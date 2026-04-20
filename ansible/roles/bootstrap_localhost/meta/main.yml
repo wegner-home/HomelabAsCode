@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: Bootstraps the NixOS localhost for management — directories, user/group setup, SSH CA, packages, and NixOS config
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: GenericLinux
+      versions:
+        - all
+
+dependencies: []

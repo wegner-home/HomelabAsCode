@@ -1,0 +1,221 @@
+---
+# tasks file for blueprint_repo role
+# ===================================
+# Generates a git repository from a blueprint definition.
+#
+# Flow:
+#   1. Load and validate manifest
+#   2. Create output directory structure
+#   3. Sync static files (rsync --ignore-existing)
+#   4. Render template files (always regenerate)
+#   5. Run post-generation hooks
+#   6. Git init/commit if enabled
+
+# ===============================================
+# Phase 1: Load and Validate Manifest
+# ===============================================
+- name: 'Blueprint [{{ blueprint_name }}] — Validate required variables'
+  ansible.builtin.assert:
+    that:
+      - blueprint_name is defined
+      - blueprint_source is defined
+      - blueprint_output is defined
+    fail_msg: 'blueprint_name, blueprint_source, and blueprint_output are required'
+    quiet: true
+
+- name: 'Blueprint [{{ blueprint_name }}] — Check blueprint source exists'
+  ansible.builtin.stat:
+    path: '{{ blueprint_source }}'
+  register: _blueprint_source_stat
+  delegate_to: localhost
+
+- name: 'Blueprint [{{ blueprint_name }}] — Fail if source missing'
+  ansible.builtin.fail:
+    msg: 'Blueprint source not found: {{ blueprint_source }}'
+  when: not _blueprint_source_stat.stat.exists
+
+- name: 'Blueprint [{{ blueprint_name }}] — Check for manifest.yml'
+  ansible.builtin.stat:
+    path: '{{ blueprint_source }}/manifest.yml'
+  register: _blueprint_manifest_stat
+  delegate_to: localhost
+
+- name: 'Blueprint [{{ blueprint_name }}] — Load manifest.yml'
+  ansible.builtin.include_vars:
+    file: '{{ blueprint_source }}/manifest.yml'
+    name: _blueprint_manifest_raw
+  when: _blueprint_manifest_stat.stat.exists
+
+- name: 'Blueprint [{{ blueprint_name }}] — Merge manifest with defaults'
+  ansible.builtin.set_fact:
+    _blueprint_manifest: >-
+      {{ blueprint_manifest_defaults | combine(_blueprint_manifest_raw | default({}), recursive=true) }}
+
+# Merge manifest context into template_vars (caller vars take precedence)
+- name: 'Blueprint [{{ blueprint_name }}] — Merge manifest context into template_vars'
+  ansible.builtin.set_fact:
+    blueprint_template_vars: >-
+      {{ (_blueprint_manifest.context | default({})) | combine(blueprint_template_vars, recursive=true) }}
+
+- name: 'Blueprint [{{ blueprint_name }}] — Display configuration'
+  ansible.builtin.debug:
+    msg:
+      - '=============================================='
+      - 'Blueprint: {{ _blueprint_manifest.name }}'
+      - 'Version: {{ _blueprint_manifest.version }}'
+      - 'Description: {{ _blueprint_manifest.description }}'
+      - '=============================================='
+      - 'Source: {{ blueprint_source }}'
+      - 'Output: {{ blueprint_output }}'
+      - 'Environment: {{ blueprint_env }}'
+      - 'Hosts: {{ blueprint_hosts.keys() | list | join(", ") | default("none") }}'
+      - 'Static sync: {{ _blueprint_manifest.static.sync_mode | default(blueprint_static_sync_mode) }}'
+      - 'Templates: {{ _blueprint_manifest.templates | length }}'
+      - 'Git init: {{ blueprint_git_init }}'
+      - '=============================================='
+  when: blueprint_debug | bool
+
+# ===============================================
+# Phase 2: Create Output Directory Structure
+# ===============================================
+- name: 'Blueprint [{{ blueprint_name }}] — Ensure output directory exists'
+  ansible.builtin.file:
+    path: '{{ blueprint_output }}'
+    state: directory
+    owner: '{{ blueprint_owner }}'
+    group: '{{ blueprint_group }}'
+    mode: '{{ blueprint_dir_mode }}'
+  delegate_to: localhost
+
+- name: 'Blueprint [{{ blueprint_name }}] — Create manifest directories'
+  ansible.builtin.file:
+    path: '{{ blueprint_output }}/{{ item }}'
+    state: directory
+    owner: '{{ blueprint_owner }}'
+    group: '{{ blueprint_group }}'
+    mode: '{{ blueprint_dir_mode }}'
+  loop: '{{ _blueprint_manifest.directories | default([]) }}'
+  delegate_to: localhost
+
+- name: 'Blueprint [{{ blueprint_name }}] — Create per-host directories'
+  ansible.builtin.file:
+    path: '{{ blueprint_output }}/hosts/{{ item.key }}'
+    state: directory
+    owner: '{{ blueprint_owner }}'
+    group: '{{ blueprint_group }}'
+    mode: '{{ blueprint_dir_mode }}'
+  loop: '{{ blueprint_hosts | dict2items }}'
+  loop_control:
+    label: 'hosts/{{ item.key }}'
+  delegate_to: localhost
+  when: blueprint_hosts | length > 0
+
+# ===============================================
+# Phase 3: Sync Static Files
+# ===============================================
+- name: 'Blueprint [{{ blueprint_name }}] — Check for static directory'
+  ansible.builtin.stat:
+    path: '{{ blueprint_source }}/static'
+  register: _blueprint_static_stat
+  delegate_to: localhost
+
+- name: 'Blueprint [{{ blueprint_name }}] — Sync static files'
+  ansible.builtin.include_tasks:
+    file: _sync_static.yml
+  when: _blueprint_static_stat.stat.exists
+
+# ===============================================
+# Phase 4: Render Template Files
+# ===============================================
+- name: 'Blueprint [{{ blueprint_name }}] — Check for templates directory'
+  ansible.builtin.stat:
+    path: '{{ blueprint_source }}/templates'
+  register: _blueprint_templates_stat
+  delegate_to: localhost
+
+- name: 'Blueprint [{{ blueprint_name }}] — Render templates'
+  ansible.builtin.include_tasks:
+    file: _render_templates.yml
+  when: _blueprint_templates_stat.stat.exists
+
+# ===============================================
+# Phase 5: Run Post-Generation Hook
+# ===============================================
+- name: 'Blueprint [{{ blueprint_name }}] — Build context for hooks'
+  ansible.builtin.set_fact:
+    _hook_repo_context: >-
+      {{ blueprint_template_vars | combine({
+           'all_hosts': blueprint_hosts,
+           'env': blueprint_env
+         }) }}
+
+- name: 'Blueprint [{{ blueprint_name }}] — Run post-generate hook'
+  ansible.builtin.include_tasks:
+    file: '{{ blueprint_source }}/{{ _blueprint_manifest.hooks.post_generate }}'
+  vars:
+    blueprint_repo_context: '{{ _hook_repo_context }}'
+    blueprint_source_dir: '{{ blueprint_source }}'
+    blueprint_output_dir: '{{ blueprint_output }}'
+  when:
+    - _blueprint_manifest.hooks.post_generate is defined
+    - _blueprint_manifest.hooks.post_generate | length > 0
+
+# ===============================================
+# Phase 6: Git Operations
+# ===============================================
+- name: 'Blueprint [{{ blueprint_name }}] — Git operations'
+  when: blueprint_git_init | bool
+  block:
+    - name: Check if output is a git repository
+      ansible.builtin.stat:
+        path: '{{ blueprint_output }}/.git'
+      register: _blueprint_git_stat
+      delegate_to: localhost
+
+    - name: Initialize git repository
+      ansible.builtin.command:
+        cmd: git init
+        chdir: '{{ blueprint_output }}'
+      when: not _blueprint_git_stat.stat.exists
+      register: _blueprint_git_init
+      changed_when: _blueprint_git_init.rc == 0
+      delegate_to: localhost
+
+    - name: Stage all files
+      ansible.builtin.command:
+        cmd: git add -A
+        chdir: '{{ blueprint_output }}'
+      register: _blueprint_git_add
+      changed_when: _blueprint_git_add.rc == 0
+      delegate_to: localhost
+
+    - name: Check for uncommitted changes
+      ansible.builtin.command:
+        cmd: git diff --cached --quiet
+        chdir: '{{ blueprint_output }}'
+      register: _blueprint_git_diff
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Commit changes
+      ansible.builtin.command:
+        cmd: 'git commit -m "{{ blueprint_git_commit_message }}"'
+        chdir: '{{ blueprint_output }}'
+      when:
+        - blueprint_git_commit | bool
+        - _blueprint_git_diff.rc != 0
+      register: _blueprint_git_commit
+      changed_when: _blueprint_git_commit.rc == 0
+      delegate_to: localhost
+      environment:
+        GIT_AUTHOR_NAME: '{{ blueprint_git_author_name }}'
+        GIT_AUTHOR_EMAIL: '{{ blueprint_git_author_email }}'
+        GIT_COMMITTER_NAME: '{{ blueprint_git_author_name }}'
+        GIT_COMMITTER_EMAIL: '{{ blueprint_git_author_email }}'
+
+- name: 'Blueprint [{{ blueprint_name }}] — Generation complete'
+  ansible.builtin.debug:
+    msg:
+      - 'Blueprint "{{ _blueprint_manifest.name }}" generated successfully'
+      - 'Output: {{ blueprint_output }}'

@@ -1,0 +1,265 @@
+---
+# Proxmox Cluster Formation
+# ====================================================================
+# Automatically creates or joins a Proxmox cluster based on inventory groups.
+# Nodes under [proxmox_cluster:children] sharing the same child group will
+# form a cluster together.  The child-group name becomes the cluster name
+# (overridable via proxmox_cluster_name).
+#
+# Example inventory:
+#   [proxmox_cluster:children]
+#   hh-prod-1
+#
+#   [hh-prod-1]
+#   pve05 ansible_host=10.10.10.50
+#   pve04 ansible_host=10.10.10.40
+#
+# Result: a Proxmox cluster named "hh-prod-1" containing pve05 + pve04.
+
+- name: Cluster formation
+  when:
+    - proxmox_cluster_enabled | bool
+    - "'proxmox_cluster' in group_names"
+  block:
+    # ================================================================
+    # Phase 1 – Discover cluster topology from inventory
+    # ================================================================
+
+    - name: "Cluster | Identify the cluster child group for this node"
+      ansible.builtin.set_fact:
+        _pve_cluster_group: "{{ item }}"
+      when:
+        - item not in proxmox_cluster_skip_groups
+        - inventory_hostname in groups[item]
+        - groups[item] | difference(groups['proxmox_cluster']) | length == 0
+      loop: "{{ group_names }}"
+
+    - name: "Cluster | Fail if cluster child group could not be determined"
+      ansible.builtin.fail:
+        msg: >-
+          Cannot determine cluster child group for {{ inventory_hostname }}.
+          Ensure the host is listed inside a child group of [proxmox_cluster:children].
+      when: _pve_cluster_group is not defined
+
+    - name: "Cluster | Set cluster name and sorted member list"
+      ansible.builtin.set_fact:
+        _pve_cluster_name: "{{ proxmox_cluster_name | default(_pve_cluster_group, true) }}"
+        _pve_cluster_members: "{{ groups[_pve_cluster_group] | sort }}"
+
+    - name: "Cluster | Show discovered topology"
+      ansible.builtin.debug:
+        msg: "cluster={{ _pve_cluster_name }}  members={{ _pve_cluster_members }}  self={{ inventory_hostname }}"
+
+    - name: "Cluster | Skip create/join for single-node topology"
+      ansible.builtin.debug:
+        msg: >-
+          Skipping cluster create/join: only one member found in
+          cluster group '{{ _pve_cluster_group }}' ({{ _pve_cluster_members }}).
+      when: _pve_cluster_members | length <= 1
+
+    # ================================================================
+    # Phase 2 – Check current cluster state on every node
+    # ================================================================
+
+    - name: "Cluster | Query pvecm status"
+      ansible.builtin.command: pvecm status
+      register: _pve_cluster_status_raw
+      changed_when: false
+      failed_when: false
+      become: true
+      when: _pve_cluster_members | length > 1
+
+    - name: "Cluster | Parse cluster status"
+      ansible.builtin.set_fact:
+        _pve_in_cluster: >-
+          {{ _pve_cluster_status_raw.rc == 0
+             and 'Cluster information' in (_pve_cluster_status_raw.stdout | default('')) }}
+        _pve_current_cluster_name: >-
+          {{ (_pve_cluster_status_raw.stdout | default(''))
+             | regex_search('Cluster Name:\s*(\S+)', '\1')
+             | default([''], true) | first }}
+      when: _pve_cluster_members | length > 1
+
+    - name: "Cluster | Fail if node belongs to a DIFFERENT cluster"
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }} is already a member of cluster
+          '{{ _pve_current_cluster_name }}' but should be in
+          '{{ _pve_cluster_name }}'. Manual intervention required
+          (pvecm delnode / pvecm expected).
+      when:
+        - _pve_cluster_members | length > 1
+        - _pve_in_cluster | bool
+        - _pve_current_cluster_name != ''
+        - _pve_current_cluster_name != _pve_cluster_name
+
+    # ================================================================
+    # Phase 3 – Prepare inter-node connectivity (SSH + /etc/hosts)
+    # ================================================================
+
+    - name: "Cluster | Ensure /etc/hosts contains peer entries"
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '\s{{ item }}$'
+        line: "{{ hostvars[item]['ansible_host'] | default(item) }} {{ item }}"
+        state: present
+      loop: "{{ _pve_cluster_members | reject('equalto', inventory_hostname) | list }}"
+      become: true
+      when: _pve_cluster_members | length > 1
+
+    - name: "Cluster | Ensure root has an SSH keypair"
+      ansible.builtin.command:
+        cmd: ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N ""
+        creates: /root/.ssh/id_ed25519
+      become: true
+      when: _pve_cluster_members | length > 1
+
+    - name: "Cluster | Read root public key"
+      ansible.builtin.slurp:
+        src: /root/.ssh/id_ed25519.pub
+      register: _pve_root_pubkey
+      become: true
+      when: _pve_cluster_members | length > 1
+
+    - name: "Cluster | Authorise peer root SSH keys"
+      ansible.posix.authorized_key:
+        user: root
+        key: "{{ hostvars[item]['_pve_root_pubkey']['content'] | b64decode }}"
+        state: present
+      loop: "{{ _pve_cluster_members | reject('equalto', inventory_hostname) | list }}"
+      become: true
+      when: _pve_cluster_members | length > 1
+
+    - name: "Cluster | Trust SSH host keys of peers"
+      ansible.builtin.shell:
+        cmd: |
+          ssh-keyscan -t ed25519,rsa,ecdsa {{ hostvars[item]['ansible_host'] | default(item) }} >> /root/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -t ed25519,rsa,ecdsa {{ item }} >> /root/.ssh/known_hosts 2>/dev/null
+          sort -u -o /root/.ssh/known_hosts /root/.ssh/known_hosts
+      loop: "{{ _pve_cluster_members | reject('equalto', inventory_hostname) | list }}"
+      become: true
+      changed_when: false
+      when: _pve_cluster_members | length > 1
+
+    # ================================================================
+    # Phase 4 – Create or join the cluster
+    # ================================================================
+
+    # 4a: Aggregate cluster state across all members
+    - name: "Cluster | Initialize detection flags"
+      ansible.builtin.set_fact:
+        _pve_any_has_cluster: false
+        _pve_join_target: ""
+        _pve_join_target_ip: ""
+      when: _pve_cluster_members | length > 1
+
+    - name: "Cluster | Detect existing cluster on members"
+      ansible.builtin.set_fact:
+        _pve_any_has_cluster: true
+        _pve_join_target: "{{ (_pve_join_target | default('')) or item }}"
+        _pve_join_target_ip: >-
+          {{ (_pve_join_target_ip | default('')) or
+             (hostvars[item]['ansible_host'] | default(item)) }}
+      when:
+        - _pve_cluster_members | length > 1
+        - hostvars[item]['_pve_in_cluster'] | default(false) | bool
+      loop: "{{ _pve_cluster_members }}"
+
+    # 4b: First sorted node creates the cluster when none exists yet
+    - name: "Cluster | Create new cluster '{{ _pve_cluster_name }}'"
+      ansible.builtin.command:
+        cmd: "pvecm create {{ _pve_cluster_name }}"
+      when:
+        - _pve_cluster_members | length > 1
+        - not (_pve_any_has_cluster | bool)
+        - not (_pve_in_cluster | bool)
+        - inventory_hostname == _pve_cluster_members[0]
+      become: true
+      register: _pve_create_result
+
+    - name: "Cluster | Wait for quorum after cluster creation"
+      ansible.builtin.command: pvecm status
+      register: _pve_post_create_status
+      until: _pve_post_create_status.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+      when:
+        - _pve_cluster_members | length > 1
+        - _pve_create_result is changed
+      become: true
+
+    - name: "Cluster | Update in-cluster flag after creation"
+      ansible.builtin.set_fact:
+        _pve_in_cluster: true
+      when:
+        - _pve_cluster_members | length > 1
+        - _pve_create_result is changed
+
+    # 4c: Re-discover the join target (the creating node is now in the cluster)
+    - name: "Cluster | Reset join target for joining phase"
+      ansible.builtin.set_fact:
+        _pve_join_target: ""
+        _pve_join_target_ip: ""
+      when: _pve_cluster_members | length > 1
+
+    - name: "Cluster | Find cluster member to join"
+      ansible.builtin.set_fact:
+        _pve_join_target: "{{ item }}"
+        _pve_join_target_ip: "{{ hostvars[item]['ansible_host'] | default(item) }}"
+      when:
+        - _pve_cluster_members | length > 1
+        - hostvars[item]['_pve_in_cluster'] | default(false) | bool
+        - _pve_join_target == ''
+      loop: "{{ _pve_cluster_members }}"
+
+    # 4d: Remaining nodes join one at a time
+    # --use_ssh: use standard SSH (picks up keys from Phase 3) instead of
+    #            pvecm's built-in SSH client which prompts for a password.
+    - name: "Cluster | Join cluster via {{ _pve_join_target | default('N/A') }}"
+      ansible.builtin.command:
+        cmd: "pvecm add {{ _pve_join_target_ip }} --use_ssh --force"
+      when:
+        - _pve_cluster_members | length > 1
+        - not (_pve_in_cluster | bool)
+        - _pve_join_target != ''
+      become: true
+      throttle: 1
+      register: _pve_join_result
+
+    - name: "Cluster | Wait for node to stabilise after join"
+      ansible.builtin.command: pvecm status
+      register: _pve_post_join_status
+      until: _pve_post_join_status.rc == 0
+      retries: 12
+      delay: 10
+      changed_when: false
+      when:
+        - _pve_cluster_members | length > 1
+        - _pve_join_result is changed
+      become: true
+
+    - name: "Cluster | Update in-cluster flag after join"
+      ansible.builtin.set_fact:
+        _pve_in_cluster: true
+      when:
+        - _pve_cluster_members | length > 1
+        - _pve_join_result is changed
+
+    # ================================================================
+    # Phase 5 – Validate
+    # ================================================================
+
+    - name: "Cluster | Show final cluster membership"
+      ansible.builtin.command: pvecm nodes
+      register: _pve_final_nodes
+      changed_when: false
+      become: true
+      when: _pve_cluster_members | length > 1
+
+    - name: "Cluster | Display cluster nodes"
+      ansible.builtin.debug:
+        msg: "{{ _pve_final_nodes.stdout_lines }}"
+      when:
+        - _pve_cluster_members | length > 1
+        - _pve_final_nodes is defined

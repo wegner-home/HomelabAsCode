@@ -1,0 +1,10 @@
+# Longhorn kernel modules patch — applied to ALL nodes
+# Loads kernel modules required by Longhorn distributed storage.
+# Longhorn itself is deployed via FluxCD Helm chart.
+machine:
+  kernel:
+    modules:
+      - name: iscsi_tcp
+      - name: dm_mod
+      - name: dm_thin_pool
+      - name: nbd

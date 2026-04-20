@@ -1,0 +1,9 @@
+---
+# Handlers for gitlab_runner role
+
+- name: restart gitlab-runner
+  ansible.builtin.systemd:
+    name: gitlab-runner.service
+    state: restarted
+    enabled: true
+  failed_when: false

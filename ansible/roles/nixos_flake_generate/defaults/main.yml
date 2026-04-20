@@ -1,0 +1,35 @@
+---
+# defaults file for nixos_flake_generate role
+# Generates a NixOS Flakes repository from inventory via the blueprint_repo role.
+#
+# Blueprint source:  blueprints/nix-flakes/  (templates + static files)
+# Blueprint output:  repos/nix-vms/          (rendered git repo)
+#
+# Prerequisites (set by inventory_builder / inventory_loader):
+#   inventory_builder_all_vms   — dict of all NixOS VM definitions
+#   inventory_builder_env       — environment name (dev, dev-test, …)
+#   inventory_builder_project_owner / _group — file ownership
+
+# ===============================================
+# NixOS Flakes Repository Settings
+# ===============================================
+# Normalized repo root (shared contract with inventory_builder/inventory_loader)
+# Falls back to playbook-relative root when global_iac_root is unset/empty.
+inventory_builder_repo_root: >-
+  {{ (global_iac_root | default(playbook_dir ~ '/..', true))
+     | regex_replace('/+$', '')
+     | regex_replace('/ansible$', '') }}
+
+# Output directory for generated NixOS flake configurations
+# This is the SAME directory that gets pushed to GitLab by stage_4.
+# Static files (profiles/, modules/, secrets/) are synced from blueprint on init.
+# Host configs (hosts/*/configuration.nix) and flake.nix are generated from inventory.
+inventory_builder_flakes_dir: "{{ inventory_builder_repo_root }}/repos/nix-vms"
+inventory_builder_generate_flakes: true # Generate flake repository structure
+inventory_builder_nixos_version: "25.11" # NixOS release version
+inventory_builder_version: "1.0" # Role version for documentation
+
+# Blueprint source directory for NixOS flakes (templates + static files)
+# Static files (profiles/, modules/, secrets/) are copied on fresh init.
+# Templates are rendered for each host.
+inventory_builder_nix_blueprint_dir: "{{ inventory_builder_repo_root }}/.blueprints/nix-flakes"

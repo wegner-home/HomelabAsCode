@@ -1,0 +1,7 @@
+---
+# defaults file for bootstrap_cleanup role
+
+# Path to the INI-style inventory file for production sync.
+# NOTE: Override in playbook vars if targeting a different environment.
+bootstrap_cleanup_ansible_inventory_path: '{{ playbook_dir }}/inventory/{{ lookup("env", "NIX_ENV") | default("dev", true) }}/hosts.yml'
+bootstrap_cleanup_ansible_inventory_group: "{{ global_host_inventory_group | default('servers') }}"

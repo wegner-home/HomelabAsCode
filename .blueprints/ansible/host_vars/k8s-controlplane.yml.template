@@ -1,0 +1,35 @@
+---
+# Example host_vars for a Talos control plane node.
+# Used by Stage 2 template generation to build:
+#   - terraform/talos-vms.auto.tfvars
+#   - terraform/talos-nodes.auto.tf
+#   - terraform/talos-providers.auto.tf
+
+global_vm_definitions:
+  k8s-controlplane-01:
+    # Required for Talos node classification in tf_inventory_loader
+    role: "controlplane"
+
+    # Required node identity/network for generated Talos VM resources
+    ip_address: "10.90.5.100"
+    mac_address: "BC:24:11:90:00:01"
+
+    # Optional overrides (defaults come from group_vars/talos/cluster.yml)
+    target_node: "pve02"
+    cores: 2
+    memory: 4096
+    disk_size: "20G"
+    disk_storage: "local-lvm"
+    bridge: "vmbr0"
+    iso_file: "local:iso/talos-amd64.iso"
+
+    # Informational metadata
+    description: "Talos control plane node 01"
+    tags:
+      - talos
+      - kubernetes
+      - controlplane
+
+# Host-level connection metadata (used by later Ansible/Talos stages)
+# NOTE: ansible_host set in hosts.yml (single source of truth)
+host_role: "talos-controlplane"

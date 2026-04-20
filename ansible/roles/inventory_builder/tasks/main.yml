@@ -1,0 +1,65 @@
+---
+# inventory_builder — Orchestrator role
+# Delegates to atomic child roles for each generation concern.
+#
+# Child roles:
+#   inventory_loader      — loads host_vars, categorizes VMs, derives views
+#   terraform_generate_nixos        — NixOS VM Terraform .tfvars + .tf files
+#   terraform_generate_talos        — Talos K8s Terraform .tfvars + .tf files
+#   nixos_flake_generate     — NixOS Flakes repo via blueprint_repo
+#   docker_compose_generate  — Docker Compose repo via blueprint_repo
+#   k8s_gitops_generate      — FluxCD GitOps repo via blueprint_repo
+#
+# Shared defaults (project_dir, owner, group, env) cascade from this
+# role's defaults to child roles via Ansible variable precedence.
+
+# -----------------------------------------------
+# Data Loading (delegates to inventory_loader)
+# -----------------------------------------------
+- name: Load inventory data via inventory_loader
+  ansible.builtin.include_role:
+    name: inventory_loader
+  when: inventory_builder_all_hosts is not defined
+
+# ===============================================
+# PHASE 2: Generate Terraform Configs
+# ===============================================
+
+- name: 'Phase 2a: Generate NixOS VM Terraform configs'
+  ansible.builtin.include_role:
+    name: terraform_generate_nixos
+  when:
+    - inventory_builder_generate_nixos_vms | default(true)
+    - inventory_builder_all_vms | default({}) | length > 0
+
+- name: 'Phase 2b: Generate Talos K8s Terraform configs'
+  ansible.builtin.include_role:
+    name: terraform_generate_talos
+  when: inventory_builder_generate_talos | default(false)
+
+# ===============================================
+# PHASE 3: Generate NixOS Flakes Repository
+# ===============================================
+
+- name: 'Phase 3: Generate NixOS Flakes Repository'
+  ansible.builtin.include_role:
+    name: nixos_flake_generate
+  when:
+    - inventory_builder_generate_flakes | default(true)
+    - inventory_builder_all_vms | default({}) | length > 0
+
+# ===============================================
+# PHASE 4: Generate Auxiliary Repositories
+# ===============================================
+
+- name: 'Phase 4a: Generate Docker Compose Repository'
+  ansible.builtin.include_role:
+    name: docker_compose_generate
+  when:
+    - inventory_builder_generate_docker_compose | default(true)
+    - inventory_builder_all_vms | default({}) | length > 0
+
+- name: 'Phase 4b: Generate K8s GitOps Repository'
+  ansible.builtin.include_role:
+    name: k8s_gitops_generate
+  when: inventory_builder_generate_k8s_repo | default(false) | bool

@@ -1,0 +1,7 @@
+# API Endpoints for Infrastructure Services
+
+global_proxmox_api_url: "https://10.10.10.40:8006/api2/json"
+global_opnsense_api_url: "https://10.10.100.1"
+global_truenas_api_url: "https://10.0.10.20/api/v2.0"
+global_gitlab_api_url: "" # leave empty if you are using the local GitLab instance.
+

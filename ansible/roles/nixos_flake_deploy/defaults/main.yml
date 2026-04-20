@@ -1,0 +1,230 @@
+---
+# Default variables for nixos_flake_deploy role
+# Unified NixOS flake deployment - supports multiple flakes per host
+
+# ==============================================
+# Host Flakes Configuration
+# ==============================================
+
+# List of flakes to deploy on this host — REQUIRED from host_vars.
+# No default provided; preflight.yml asserts this is populated.
+# Each item can be a string (flake name) or a dict with options.
+# Stage playbooks (stage_4.yml, stage_6.yml) also assert
+# host_flakes | length > 0 before calling this role.
+# Examples:
+#   host_flakes: ['admin', 'docker']
+#   host_flakes:
+#     - name: 'gitlab'
+#       repo: 'github:user/gitlab-flake'
+#     - name: 'monitoring'
+#       deploy_from_repo: false
+
+# ==============================================
+# Flake Repository Configuration
+# ==============================================
+
+# Default remote flake repository URL (can be overridden per-flake)
+# Examples:
+#   - github:username/repo
+#   - gitlab:username/repo
+#   - git+https://gitlab.{{ global_domain }}/infra/nixos-configs.git
+#   - /path/to/local/flake
+nixos_flake_repo: '{{ global_nixos_flake_repo | default("") }}'
+
+# Flake host output name (maps to nixosConfigurations.<name> in flake.nix)
+# Used when host_flakes is empty (single flake mode)
+nixos_flake_host: '{{ inventory_hostname }}'
+
+# Deploy from remote repository (true) or local templates (false)
+nixos_flake_deploy_from_repo: true
+
+# ==============================================
+# Host Identity (for templates)
+# ==============================================
+nixos_host_hostname: '{{ inventory_hostname_short }}'
+nixos_host_domain: '{{ global_domain }}'
+nixos_host_fqdn: '{{ nixos_host_hostname }}.{{ nixos_host_domain }}'
+
+# Host role/purpose - used for flake selection and config
+nixos_host_role: '{{ host_role | default("generic") }}'
+
+# ==============================================
+# Local Deployment Settings
+# ==============================================
+
+# Directory for local flake deployment
+nixos_flake_deploy_dir: '/etc/nixos'
+
+# Local flake repository path (used when copying full repo)
+# Set this to copy the entire flake repo instead of using templates
+nixos_flake_local_repo_path: '{{ nix_flake_repo_path | default("") }}'
+
+# Use full repo copy instead of templates (for GitLab bootstrap)
+# When true, copies the entire nix_flakes directory
+# When false, uses Jinja2 templates (flake.nix.j2, configuration.nix.j2)
+nixos_flake_use_repo_copy: false
+
+# NixOS state version for templates
+nixos_state_version: '25.11'
+
+# Nix channel for flake inputs
+nixos_channel: 'nixos-unstable'
+
+# ==============================================
+# Rebuild Options
+# ==============================================
+
+# Force rebuild even if configuration hasn't changed
+nixos_flake_force_rebuild: false
+
+# Build on localhost using --target-host to deploy to the remote VM.
+# This avoids all NixOS-rebuild-on-target issues:
+#   - No Python needed on target during build
+#   - No SSH session survival issues (sshd restart, host key rotation)
+#   - No OOM risk on small VMs (build uses localhost resources)
+#   - Warm nix store cache on localhost is shared across all VM deploys
+# The build runs locally, nix-copy-closure pushes the result, then a brief
+# SSH command activates the new generation on the target.
+#
+# NOTE: When deploying from templates (deploy_from_repo=false) AND
+# use_repo_copy=false, this MUST be false because the configuration
+# exists only on the target's /etc/nixos, not in a local flake repository.
+# However, when use_repo_copy=true the full flake IS available locally
+# at nixos_flake_local_repo_path, so --target-host works fine.
+# Override per-host in host_vars if needed (e.g. gitlab VM to avoid OOM).
+nixos_flake_use_target_host: '{{ nixos_flake_deploy_from_repo | default(false) }}'
+
+# SSH user for --target-host (needs sudo on target)
+# Uses --use-remote-sudo so a non-root user with passwordless sudo works
+nixos_flake_target_ssh_user: '{{ ansible_user | default("ansible") }}'
+
+# SSH key for --target-host connection
+nixos_flake_target_ssh_key: '{{ ansible_ssh_private_key_file | default("") }}'
+
+# SSH options for --target-host (host key checking disabled because
+# nixos-rebuild switch regenerates host keys on the target)
+nixos_flake_target_ssh_opts: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
+
+# Additional arguments for nixos-rebuild
+# Examples: '--show-trace', '--impure', '--no-build-output'
+nixos_flake_rebuild_args: ''
+
+# Rebuild command (switch, boot, test, dry-run)
+nixos_flake_rebuild_command: 'switch'
+
+# ==============================================
+# Validation and Safety
+# ==============================================
+
+# Validate flake before applying (recommended)
+nixos_flake_validate_before_apply: true
+
+# Create backup of /etc/nixos before deployment (local mode only)
+nixos_flake_backup_config: true
+
+# Maximum time to wait for rebuild (seconds)
+nixos_flake_rebuild_timeout: 1800 # 30 minutes
+
+# ==============================================
+# Template Variables (Mode 2 — GitLab Bootstrap)
+# ==============================================
+# These defaults are used by Mode 2 (local Jinja2 template deployment)
+# via templates/flake.nix.j2 and templates/configuration.nix.j2.
+#
+# Mode 2 is REQUIRED for the initial GitLab VM bootstrap:
+#   GitLab VM doesn't exist yet → no repo to pull from → Mode 1 can't work
+#   → Mode 2 renders templates locally and pushes them to the new VM
+#   → GitLab VM comes up → hosts the flake repo → all other VMs use Mode 1
+#
+# Do NOT remove these defaults — they look unused from a Mode 1 perspective
+# but are critical for the bootstrap chain.
+# ==============================================
+
+# Base packages for all hosts
+nixos_host_base_packages:
+  - git
+  - vim
+  - curl
+  - wget
+  - htop
+  - rsync
+  - openssh
+
+# Additional packages - define in host_vars
+nixos_host_packages: '{{ host_packages | default([]) }}'
+
+# Combined package list
+nixos_host_all_packages: '{{ nixos_host_base_packages + nixos_host_packages }}'
+
+# ==============================================
+# User Configuration (for templates)
+# ==============================================
+
+# Default service user
+nixos_host_default_user:
+  name: '{{ global_service_user | default("ansible") }}'
+  description: '{{ project_name }} service account'
+  groups:
+    - wheel
+  shell: /run/current-system/sw/bin/bash
+  ssh_authorized_keys: []
+
+# Additional users - define in host_vars
+nixos_host_users: '{{ [nixos_host_default_user] + (host_users | default([])) }}'
+
+# ==============================================
+# Services Configuration (for templates)
+# ==============================================
+
+# Enable Docker
+nixos_host_enable_docker: '{{ host_enable_docker | default(false) }}'
+
+# Enable Tailscale VPN
+nixos_host_enable_tailscale: '{{ host_enable_tailscale | default(false) }}'
+
+# Enable Prometheus node exporter
+nixos_host_enable_node_exporter: '{{ host_enable_node_exporter | default(true) }}'
+nixos_host_node_exporter_port: 9100
+
+# ==============================================
+# Firewall Configuration (for templates)
+# ==============================================
+nixos_host_firewall_enable: '{{ host_firewall_enable | default(true) }}'
+
+# Base allowed ports (SSH + monitoring)
+nixos_host_base_firewall_tcp_ports:
+  - 22 # SSH
+
+# Additional ports - define in host_vars
+nixos_host_firewall_tcp_ports: '{{ host_firewall_tcp_ports | default([]) }}'
+
+# GitLab-specific ports (80, 443, registry, prometheus)
+nixos_host_gitlab_firewall_tcp_ports: >-
+  {{
+    [80, 443] +
+    ([gitlab_registry_port | default(5050)] if (gitlab_enable_registry | default(true)) else []) +
+    ([gitlab_prometheus_port | default(9090)] if (gitlab_enable_prometheus | default(true)) else [])
+  }}
+
+# Add node exporter port if enabled
+nixos_host_firewall_allowed_tcp_ports: >-
+  {{
+    nixos_host_base_firewall_tcp_ports +
+    nixos_host_firewall_tcp_ports +
+    ([nixos_host_node_exporter_port] if nixos_host_enable_node_exporter else []) +
+    (nixos_host_gitlab_firewall_tcp_ports if nixos_host_role == 'gitlab' else [])
+  }}
+
+# ==============================================
+# SSH CA Configuration (for templates)
+# ==============================================
+nixos_host_ssh_ca_enable: '{{ host_ssh_ca_enable | default(false) }}'
+nixos_host_ssh_ca_dir: "{{ global_ssh_user_ca_dir | default('/var/local/' ~ project_name ~ '/ssh/ca/user') }}"
+nixos_host_ssh_ca_key_name: "{{ global_ssh_user_ca_key_name | default(project_name ~ '_user_ca') }}"
+
+# ==============================================
+# SOPS/Age Configuration (for templates)
+# ==============================================
+nixos_host_sops_enable: '{{ host_sops_enable | default(false) }}'
+nixos_host_sops_default_sops_file: './secrets/secrets.yaml'
+nixos_host_sops_age_key_file: '/var/lib/sops-nix/key.txt'

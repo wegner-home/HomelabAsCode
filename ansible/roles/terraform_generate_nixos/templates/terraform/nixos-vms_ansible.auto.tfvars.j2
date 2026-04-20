@@ -1,0 +1,97 @@
+# Auto-generated NixOS VM definitions from Ansible inventory
+# Generated on: {{ (ansible_facts | default({})).get('date_time', {}).get('iso8601', 'unknown') }}
+# Source: ansible/roles/tf_build_inv_nix
+#
+# DO NOT EDIT MANUALLY - Changes will be overwritten
+# Modify inventory host_vars files and regenerate using: make nix-stage-2
+
+nixos_vms_ansible = {
+{% for vm_name, vm_config in tf_build_inv_nix_all_vms.items() %}
+{% set _subnets = opnsense_kea_subnets | default({}, true) %}
+{% set subnet = _subnets[vm_config.subnet_key] | default({}) %}
+  "{{ vm_name }}" = {
+    name           = "{{ vm_name }}"
+    target_node    = "{{ vm_config.target_node }}"
+    clone_template = "{{ vm_config.clone_template }}"
+    cores          = {{ vm_config.cores | default(2) }}
+    memory         = {{ vm_config.memory | default(2048) }}
+    balloon        = {{ vm_config.balloon | default(1024) }}
+    ip_address     = "{{ vm_config.ip_address }}"
+    mac_address    = "{{ vm_config.mac_address }}"
+    cidr           = "{{ vm_config.cidr }}"
+    subnet_key     = "{{ vm_config.subnet_key }}"
+    gateway        = "{{ vm_config.gateway | default(subnet.gateway | default(global_default_gateway, true), true) }}"
+
+    # DNS configuration - supports multiple hostnames
+    hostname       = "{{ vm_config.hostname | default(vm_name) }}"
+{% if vm_config.dns_hostnames is defined and vm_config.dns_hostnames | length > 0 %}
+    dns_hostnames  = [
+{% for dns_hostname in vm_config.dns_hostnames %}
+      "{{ dns_hostname }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+    ]
+{% else %}
+    dns_hostnames  = ["{{ vm_config.hostname | default(vm_name) }}"]
+{% endif %}
+
+    # Cloud-init settings
+    # NOTE: cipassword is not used - NixOS cloud-init doesn't support Proxmox cipassword
+    # Authentication is via SSH keys with passwordless sudo for wheel group
+    ciuser         = "{{ vm_config.ciuser }}"
+{% if vm_config.sshkeys is defined %}
+    # SSH keys defined in host_vars
+    sshkeys        = "{{ vm_config.sshkeys | trim }}"
+{% elif tf_build_inv_nix_default_sshkeys is defined and tf_build_inv_nix_default_sshkeys %}
+    # SSH key from service user (auto-loaded from stage_0)
+    sshkeys        = "{{ tf_build_inv_nix_default_sshkeys }}"
+{% endif %}
+
+    # Disk configuration
+{% if vm_config.optional_disks is defined and vm_config.optional_disks | length > 0 %}
+    optional_disks = [
+{% for disk in vm_config.optional_disks %}
+      {
+        storage = "{{ disk.storage | default(tf_build_inv_nix_pm_default_datastore) }}"
+        size    = "{{ disk.size }}"
+      }{{ "," if not loop.last else "" }}
+{% endfor %}
+    ]
+{% endif %}
+    # Additional disk space beyond the 5G base template disk
+    add_disk_space = "{{ vm_config.add_disk_space | default('0G') }}"
+
+    # Network bridge
+    bridge         = "{{ vm_config.bridge }}"
+
+    # DNS and DHCP options
+    dns_enabled    = {{ vm_config.dns_enabled | lower }}
+    dhcp_enabled   = {{ vm_config.dhcp_enabled | lower }}
+
+    # Description
+    description    = "{{ vm_config.description | default('NixOS VM managed by Terraform') }}"
+
+    # Tags
+{% if vm_config.tags is defined and vm_config.tags | length > 0 %}
+    tags           = [
+{% for tag in vm_config.tags %}
+      "{{ tag }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+    ]
+{% else %}
+    tags           = ["nixos", "terraform", "ansible"]
+{% endif %}
+
+    # Boot disk type (scsi or virtio)
+    boot_disk_type = "{{ vm_config.boot_disk_type }}"
+
+    # Boot order
+{% if vm_config.boot_order is defined %}
+    boot_order     = "{{ vm_config.boot_order }}"
+{% endif %}
+
+    # Start on boot
+    onboot         = {{ vm_config.onboot | lower }}
+  }{{ "," if not loop.last else "" }}
+
+{% endfor %}
+}

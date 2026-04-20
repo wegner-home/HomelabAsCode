@@ -1,0 +1,9 @@
+# Cilium CNI patch — applied to ALL nodes (control plane + workers)
+# Disables default Flannel CNI and kube-proxy so Cilium can replace both.
+# Cilium itself is deployed via FluxCD, not baked into Talos.
+cluster:
+  network:
+    cni:
+      name: none
+  proxy:
+    disabled: true

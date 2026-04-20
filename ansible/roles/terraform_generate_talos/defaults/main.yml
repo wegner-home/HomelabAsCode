@@ -1,0 +1,44 @@
+---
+# defaults file for terraform_generate_talos role
+# Generates Talos K8s Terraform files from loaded inventory data + cluster config.
+#
+# Prerequisites:
+#   inventory_loader must have run first to populate:
+#     inventory_builder_talos_cp, inventory_builder_talos_worker
+
+# ===============================================
+# Output Settings
+# ===============================================
+inventory_builder_repo_root: >-
+  {{ (global_iac_root | default(playbook_dir ~ '/..', true))
+     | regex_replace('/+$', '')
+     | regex_replace('/ansible$', '') }}
+inventory_builder_project_dir: "{{ global_iac_terraform_dir if (global_iac_terraform_dir is defined and (global_iac_terraform_dir | trim) != '' and (global_iac_terraform_dir | trim) != '/terraform') else (inventory_builder_repo_root ~ '/terraform') }}"
+inventory_builder_project_owner: '{{ (ansible_facts | default({})).get("env", {}).get("USER", lookup("env", "USER")) }}'
+inventory_builder_project_group: "users"
+
+# Talos K8s Terraform directory (for talos-terraform.tfvars)
+inventory_builder_talos_project_dir: "{{ inventory_builder_project_dir }}/talos_k8s"
+
+# Build target flag
+inventory_builder_generate_talos: false
+
+# ===============================================
+# Talos K8s Defaults
+# ===============================================
+# These are overridden by group_vars/all/talos_cluster.yml -> global_talos_cluster
+inventory_builder_talos_enabled: false
+inventory_builder_talos_version: "v1.7.6"
+inventory_builder_talos_arch: "amd64"
+# Token lookup: cluster-wide key first (vault_secrets.proxmox.cluster),
+# then per-node vault key, then static fallback.
+inventory_builder_proxmox_nodes: >-
+  {%- set cluster_creds = (vault_secrets | default({})).get('proxmox', {}).get('cluster', {}) -%}
+  {%- set nodes = {} -%}
+  {%- for node in groups['proxmox_nodes'] | default([]) -%}
+    {%- set api_url = 'https://' ~ hostvars[node].ansible_host ~ ':8006/api2/json' -%}
+    {%- set token_id = cluster_creds.get('terraform_token_id', vault_secrets.proxmox[node].terraform_token_id[0] | default('terraform@pve!bootstrap')) -%}
+    {%- set token_secret = cluster_creds.get('terraform_token_secret', vault_secrets.proxmox[node].terraform_token_secret[0] | default('')) -%}
+    {%- set _ = nodes.update({node: {'api_url': api_url, 'token_id': token_id, 'token_secret': token_secret}}) -%}
+  {%- endfor -%}
+  {{ nodes }}

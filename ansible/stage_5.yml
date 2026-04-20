@@ -1,0 +1,83 @@
+---
+# Stage 5: Bootstrap Talos Kubernetes + FluxCD
+# ================================================
+# Prerequisites — run these BEFORE this playbook:
+#   1. Stage 2 (generate templates) + Stage 3 (terraform apply — manual)
+#   2. Wait for Talos VMs to boot into maintenance mode (~2 min)
+#
+# VMs get their IPs via DHCP reservations (MAC→IP) created by terraform//.
+# This playbook uses talosctl to generate config, apply it, bootstrap etcd,
+# and retrieve kubeconfig/talosconfig.
+#
+# Modes (set via global_talos_cluster.bootstrap_mode):
+#   bootstrap   — full pipeline (default)
+#   upgrade     — re-apply configs + verify (skip bootstrap)
+#   verify-only — only run verification phases
+#
+# Verification-only mode:
+#   ansible-playbook stage_5.yml -e '{"global_talos_cluster": {"bootstrap_mode": "verify-only"}}'
+#
+# Workflow Order:
+#   ansible-playbook stage_2.yml             # Generate templates
+#   cd terraform/ && terraform apply      # Stage 3 — manual
+#   ansible-playbook stage_4.yml      # GitLab bootstrap
+#   ansible-playbook stage_5.yml       # This playbook — Talos bootstrap
+#   ansible-playbook stage_6.yml             # Service VMs
+
+# ===============================================
+# Bootstrap Talos Cluster + FluxCD
+# ===============================================
+# This play runs the talos_bootstrap role which handles:
+#   - Pre-flight checks (talosctl, kubectl, sops, flux)
+#   - Config generation (secrets, machine configs, patches)
+#   - Config apply to all nodes (idempotent)
+#   - Cluster bootstrap (etcd + first controlplane)
+#   - Kubernetes & FluxCD verification
+#
+# Modes (set via global_talos_cluster.bootstrap_mode):
+#   bootstrap   — full pipeline (default)
+#   upgrade     — re-apply configs + verify (skip bootstrap)
+#   verify-only — only run verification phases
+- name: Stage 5 - Bootstrap Talos Kubernetes + FluxCD
+  hosts: localhost
+  gather_facts: true
+  become: false
+  tags:
+    - stage_5
+    - talos
+    - kubernetes
+    - fluxcd
+    - talos_bootstrap
+
+  pre_tasks:
+    - name: Load and merge vault secrets
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/helpers/load_vaults.yml"
+
+    - name: Check if Talos cluster is enabled
+      ansible.builtin.assert:
+        that:
+          - global_talos_cluster.enabled | default(false) | bool
+        fail_msg: >
+          Talos cluster is DISABLED in inventory.
+          Set global_talos_cluster.enabled to true in group_vars/all/talos_cluster.yml to proceed.
+        success_msg: >
+          Talos cluster is ENABLED — proceeding with
+          mode '{{ global_talos_cluster.bootstrap_mode | default("bootstrap") }}'
+
+    - name: Display bootstrap information
+      ansible.builtin.debug:
+        msg:
+          - "================================================"
+          - "Stage 5: Talos Cluster Bootstrap"
+          - "================================================"
+          - 'Cluster:  {{ global_talos_cluster.cluster_name | default("cluster-01") }}'
+          - 'Mode:     {{ global_talos_cluster.bootstrap_mode | default("bootstrap") }}'
+          - 'Endpoint: {{ global_talos_cluster.cluster_endpoint | default("N/A") }}'
+          - "CP nodes: {{ global_talos_cluster.controlplane_count | default(3) }}"
+          - "Workers:  {{ global_talos_cluster.worker_count | default(0) }}"
+
+  roles:
+    - role: talos_bootstrap
+      tags:
+        - talos_bootstrap

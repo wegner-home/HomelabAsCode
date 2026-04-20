@@ -1,0 +1,69 @@
+---
+# defaults file for terraform_generate_nixos role
+# Generates NixOS VM Terraform variable files from loaded inventory data.
+#
+# Prerequisites:
+#   inventory_loader must have run first to populate:
+#     inventory_builder_all_vms, inventory_builder_default_sshkeys
+
+# ===============================================
+# Output Settings
+# ===============================================
+inventory_builder_repo_root: >-
+  {{ (global_iac_root | default(playbook_dir ~ '/..', true))
+     | regex_replace('/+$', '')
+     | regex_replace('/ansible$', '') }}
+inventory_builder_project_dir: "{{ global_iac_terraform_dir if (global_iac_terraform_dir is defined and (global_iac_terraform_dir | trim) != '' and (global_iac_terraform_dir | trim) != '/terraform') else (inventory_builder_repo_root ~ '/terraform') }}"
+inventory_builder_project_owner: '{{ (ansible_facts | default({})).get("env", {}).get("USER", lookup("env", "USER")) }}'
+inventory_builder_project_group: "users"
+
+# Build target flag — set to false to skip NixOS VM tfvars generation
+inventory_builder_generate_nixos_vms: true
+
+# ===============================================
+# Proxmox API Settings
+# ===============================================
+# Per-node Proxmox API credentials map — built from inventory + vault
+# Each node in 'proxmox_nodes' group gets its own provider alias in Terraform.
+# Since Proxmox nodes may NOT be clustered, Terraform must talk directly to
+# the node hosting a VM (the API can't proxy to non-cluster peers).
+#
+# Structure: { "pve04": { api_url: ..., token_id: ..., token_secret: ... }, ... }
+# Token lookup: cluster-wide key first (runtime_secrets.proxmox.cluster),
+# then per-node vault key, then static fallback.
+inventory_builder_proxmox_nodes: >-
+  {%- set cluster_creds = (vault_secrets | default({})).get('proxmox', {}).get('cluster', {}) -%}
+  {%- set nodes = {} -%}
+  {%- for node in groups['proxmox_nodes'] | default([]) -%}
+    {%- set api_url = 'https://' ~ hostvars[node].ansible_host ~ ':8006/api2/json' -%}
+    {%- set token_id = cluster_creds.get('terraform_token_id', vault_secrets.proxmox[node].terraform_token_id[0] | default('terraform@pve!bootstrap')) -%}
+    {%- set token_secret = cluster_creds.get('terraform_token_secret', vault_secrets.proxmox[node].terraform_token_secret[0] | default('')) -%}
+    {%- set _ = nodes.update({node: {'api_url': api_url, 'token_id': token_id, 'token_secret': token_secret}}) -%}
+  {%- endfor -%}
+  {{ nodes }}
+
+# Backward compat — single API URL (used by terraform.tfvars, OPNsense, etc.)
+inventory_builder_pm_api_url: "{{ global_proxmox_api_url }}"
+
+# Get the first proxmox node from inventory (primary node for single-provider setups)
+# No fallback — if proxmox_nodes group is empty, fail loudly rather than
+# silently generating Terraform configs targeting a non-existent node.
+inventory_builder_proxmox_node: "{{ groups['proxmox_nodes'][0] }}"
+
+# Single-node tokens (backward compat for terraform.tfvars)
+# Try cluster-wide key first, then per-node key
+inventory_builder_pm_api_token_id: "{{ (vault_secrets | default({})).get('proxmox', {}).get('cluster', {}).get('terraform_token_id', vault_secrets.proxmox[inventory_builder_proxmox_node].terraform_token_id[0] | default('')) }}"
+inventory_builder_pm_api_token_secret: "{{ (vault_secrets | default({})).get('proxmox', {}).get('cluster', {}).get('terraform_token_secret', vault_secrets.proxmox[inventory_builder_proxmox_node].terraform_token_secret[0] | default('')) }}"
+inventory_builder_pm_default_datastore: "local-lvm"
+
+# ===============================================
+# OPNsense API Settings
+# ===============================================
+inventory_builder_opnsense_api_url: "{{ global_opnsense_api_url }}"
+inventory_builder_opnsense_api_key: '{{ (vault_secrets | default({})).get("opnsense", {}).get("api_key", "") }}'
+inventory_builder_opnsense_api_secret: '{{ (vault_secrets | default({})).get("opnsense", {}).get("api_secret", "") }}'
+
+# ===============================================
+# DNS Settings
+# ===============================================
+inventory_builder_enable_multiple_dns: true

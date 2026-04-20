@@ -1,0 +1,89 @@
+---
+# defaults file for blueprint_repo role
+# ======================================
+# A generic role that generates git repositories from blueprint templates.
+#
+# Usage:
+#   - name: Generate NixOS Flakes repo
+#     ansible.builtin.include_role:
+#       name: blueprint_repo
+#     vars:
+#       blueprint_name: 'nix-flakes'
+#       blueprint_source: '{{ global_iac_blueprint_dir }}/nix-flakes'
+#       blueprint_output: '{{ global_iac_root }}/config/{{ env }}/nix-flakes'
+
+# ===============================================
+# Required Variables (must be set by caller)
+# ===============================================
+# blueprint_name: ''           # Human-readable name for logging
+# blueprint_source: ''         # Path to blueprint directory (contains manifest.yml, static/, templates/)
+# blueprint_output: ''         # Path to output directory
+
+# ===============================================
+# Optional Variables
+# ===============================================
+# Environment name (used in path expansion)
+blueprint_env: '{{ lookup("env", "NIX_ENV") | default("dev", true) }}'
+
+# File ownership
+blueprint_owner: '{{ ansible_env.USER | default(lookup("env", "USER")) }}'
+blueprint_group: 'users'
+blueprint_dir_mode: '0755'
+blueprint_file_mode: '0644'
+
+# Static file sync behavior: 'ignore-existing', 'overwrite', 'skip'
+blueprint_static_sync_mode: 'ignore-existing'
+
+# Git initialization
+blueprint_git_init: true
+blueprint_git_commit: true
+blueprint_git_commit_message: 'Update generated files from blueprint'
+blueprint_git_author_name: 'Ansible'
+blueprint_git_author_email: 'ansible@{{ global_domain }}'
+
+# Debug output
+blueprint_debug: false
+
+# ===============================================
+# Manifest Defaults
+# ===============================================
+# These are overridden by manifest.yml in the blueprint source
+blueprint_manifest_defaults:
+  name: 'unnamed-blueprint'
+  description: ''
+  version: '1.0'
+  required_vars: []
+  directories: []
+  static:
+    sync_mode: 'ignore-existing'
+    exclude:
+      - '.git'
+      - '*.lock'
+  templates: []
+  hooks:
+    pre_generate: ''
+    post_generate: ''
+
+# ===============================================
+# Magic Directory Patterns
+# ===============================================
+# These patterns in template paths get expanded:
+#   _host_  → loops over blueprint_hosts (dict)
+#   _env_   → replaced with blueprint_env
+blueprint_expansion_patterns:
+  host: '_host_'
+  env: '_env_'
+
+# ===============================================
+# Template Variables (passed to all templates)
+# ===============================================
+# Caller should populate this with inventory data
+# Example:
+#   blueprint_template_vars:
+#     all_vms: '{{ inventory_builder_all_vms }}'
+#     domain: '{{ global_domain }}'
+blueprint_template_vars: {}
+
+# Host list for _host_ expansion (dict of hostname: config)
+# Typically set to inventory_builder_all_vms or similar
+blueprint_hosts: {}

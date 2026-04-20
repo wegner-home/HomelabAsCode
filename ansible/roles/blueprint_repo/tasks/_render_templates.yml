@@ -1,0 +1,39 @@
+---
+# Render template files from blueprint to output
+# Handles:
+#   - Simple 1:1 templates
+#   - Per-host expansion (_host_ pattern)
+#   - Per-env expansion (_env_ pattern)
+#   - Conditional templates (when clause)
+
+# -----------------------------------------------
+# Find all template files
+# -----------------------------------------------
+- name: "Templates [{{ blueprint_name }}] — Find all .j2 files"
+  ansible.builtin.find:
+    paths: "{{ blueprint_source }}/templates"
+    patterns: "*.j2"
+    excludes: "{{ _blueprint_manifest.template_excludes | default([]) }}"
+    recurse: true
+    hidden: true
+  register: _blueprint_template_files
+  delegate_to: localhost
+
+- name: "Templates [{{ blueprint_name }}] — Display found templates"
+  ansible.builtin.debug:
+    msg: "Found {{ _blueprint_template_files.files | length }} template files"
+  when: blueprint_debug | bool
+
+# -----------------------------------------------
+# Process each template file
+# -----------------------------------------------
+- name: "Templates [{{ blueprint_name }}] — Process templates"
+  ansible.builtin.include_tasks:
+    file: _render_single_template.yml
+  vars:
+    _template_src: "{{ _tpl_file.path }}"
+    _template_rel: '{{ _tpl_file.path | relpath(blueprint_source + "/templates") }}'
+  loop: "{{ _blueprint_template_files.files }}"
+  loop_control:
+    loop_var: _tpl_file
+    label: '{{ _tpl_file.path | relpath(blueprint_source + "/templates") }}'

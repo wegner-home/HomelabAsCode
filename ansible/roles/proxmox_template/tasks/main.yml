@@ -1,0 +1,108 @@
+---
+# Main tasks for proxmox_template role
+# Unified role for creating Proxmox VM templates from cloud images (URL) or local files
+
+- name: Display template configuration
+  ansible.builtin.debug:
+    msg:
+      - 'Creating Proxmox template'
+      - 'Source type: {{ proxmox_template_source_type }}'
+      - 'Target node: {{ proxmox_template_node }}'
+      - 'VM ID: {{ proxmox_template_vm_id }}'
+      - 'Template name: {{ proxmox_template_name }}'
+      - "Image source: {{ proxmox_template_image_url if proxmox_template_source_type == 'url' else (proxmox_template_image_file if proxmox_template_source_type == 'file' else 'NixOS build') }}"
+
+# ===============================================
+# Validate Configuration
+# ===============================================
+- name: Validate source configuration
+  ansible.builtin.include_tasks: validate.yml
+  tags:
+    - validate
+    - always
+
+# ===============================================
+# NixOS Build Phase (when source_type: nixos_build)
+# ===============================================
+- name: Build NixOS image
+  ansible.builtin.include_role:
+    name: nixos_image_build
+  when: proxmox_template_source_type == 'nixos_build'
+  run_once: true
+  tags:
+    - build
+    - nixos
+
+# ===============================================
+# Acquire Image Phase
+# ===============================================
+- name: Download cloud image from URL
+  ansible.builtin.include_tasks: download_image.yml
+  when: proxmox_template_source_type == 'url'
+  tags:
+    - download
+    - image
+
+- name: Transfer local image to Proxmox
+  ansible.builtin.include_tasks: transfer_image.yml
+  when: proxmox_template_source_type in ['file', 'nixos_build']
+  tags:
+    - transfer
+    - image
+
+# ===============================================
+# Cloud-init Snippets (optional)
+# ===============================================
+- name: Deploy cloud-init snippets
+  ansible.builtin.include_tasks: deploy_snippets.yml
+  when: proxmox_template_deploy_snippet | bool
+  tags:
+    - snippets
+    - cloudinit
+
+# ===============================================
+# VM Creation Phase
+# ===============================================
+- name: Create VM from image
+  ansible.builtin.include_tasks: create_vm.yml
+  tags:
+    - create
+    - vm
+
+# ===============================================
+# Template Conversion
+# ===============================================
+- name: Convert VM to template
+  ansible.builtin.include_tasks: convert_template.yml
+  tags:
+    - template
+
+# ===============================================
+# VM Snippets Generation (optional)
+# ===============================================
+- name: Generate VM snippets from inventory
+  ansible.builtin.include_role:
+    name: proxmox_vm_snippets
+  when: proxmox_template_generate_vm_snippets | bool
+  tags:
+    - snippets
+    - vm_snippets
+
+# ===============================================
+# Cleanup
+# ===============================================
+- name: Clean up temporary files
+  ansible.builtin.include_tasks: cleanup.yml
+  when: proxmox_template_cleanup | bool
+  tags:
+    - cleanup
+
+- name: Display completion message
+  ansible.builtin.debug:
+    msg:
+      - 'Template created successfully!'
+      - 'Node: {{ proxmox_template_node }}'
+      - 'VM ID: {{ proxmox_template_vm_id }}'
+      - 'Template name: {{ proxmox_template_name }}'
+      - 'Clone with: qm clone {{ proxmox_template_vm_id }} <new-vm-id> --name <new-vm-name>'
+      - 'Or use Terraform proxmox_vm_qemu resource with clone = "{{ proxmox_template_name }}"'

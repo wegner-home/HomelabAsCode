@@ -1,0 +1,197 @@
+{ config, lib, modulesPath, pkgs, ... }:
+
+{
+imports = [
+"${modulesPath}/profiles/qemu-guest.nix"
+];
+
+system.stateVersion = "{{ proxmox_template_nixos_version }}";
+
+# =============================================================================
+# Boot configuration
+# NOTE: When using nixos-generators 'proxmox' format, the bootloader is
+# configured by the proxmox-image.nix module. We use mkDefault/mkForce
+# to allow overrides without conflicts.
+# =============================================================================
+
+# Root filesystem - use disk label for reliability across device name changes
+fileSystems."/" = lib.mkDefault {
+device = "/dev/disk/by-label/nixos";
+fsType = "ext4";
+autoResize = true;
+};
+
+# Kernel modules for QEMU/KVM virtio
+boot.initrd.availableKernelModules = [
+"virtio_pci" "virtio_blk" "virtio_scsi" "virtio_net"
+"sd_mod" "ahci" "uas"
+{% for mod in proxmox_template_nixos_kernel_modules %}
+"{{ mod }}"
+{% endfor %}
+];
+
+# These modules are LOADED (not just available)
+boot.initrd.kernelModules = [ "virtio_pci" "virtio_blk" ];
+
+# Bootloader configuration
+# For 'proxmox' format: proxmox-image.nix sets grub.device = "/dev/vda"
+# For 'qcow'/'raw' formats: these don't install grub, so this is ignored
+# Only override if you know what you're doing
+boot.loader.grub.enable = lib.mkDefault true;
+boot.loader.grub.device = lib.mkDefault "{{ proxmox_template_nixos_grub_device }}";
+
+# Timeout moved to boot.loader.timeout in NixOS 25.11+
+# Use mkForce to override proxmox-image.nix default of 0
+boot.loader.timeout = lib.mkForce 1;
+
+# Enable partition growing on first boot
+boot.growPartition = true;
+
+# Console output for debugging
+boot.kernelParams = [ "console=ttyS0,115200" ];
+
+# Networking
+networking.useDHCP = lib.mkDefault true;
+networking.firewall.enable = lib.mkDefault {{ proxmox_template_firewall | lower }};
+
+# SSH configuration
+services.openssh = {
+enable = {{ proxmox_template_ssh_enable | lower }};
+settings = {
+PermitRootLogin = "{{ 'prohibit-password' if not proxmox_template_root_no_password else 'no' }}";
+PasswordAuthentication = false;
+};
+{% if proxmox_template_ssh_ca_pubkey %}
+# Trust SSH CA for certificate-based authentication
+extraConfig = ''
+TrustedUserCAKeys {{ proxmox_template_ssh_ca_path }}
+'';
+{% endif %}
+};
+
+# Root user configuration
+users.users.root = {
+{% if proxmox_template_root_no_password %}
+hashedPassword = "!"; # Disable password login
+{% else %}
+initialHashedPassword = "";
+{% endif %}
+};
+
+# Ansible/automation user - must be defined in NixOS config for wheel group membership
+# Cloud-init on NixOS does not properly assign groups to users
+users.users.{{ proxmox_template_ansible_user | default('ansible') }} = {
+isNormalUser = true;
+extraGroups = [ "wheel" ];
+hashedPassword = "!"; # No password, SSH key only
+openssh.authorizedKeys.keys = [
+{% if proxmox_template_ssh_ca_pubkey %}
+# SSH CA certificate authentication is used instead of individual keys
+{% endif %}
+];
+};
+
+# Allow mutableUsers so cloud-init can still add SSH keys
+users.mutableUsers = true;
+
+# Sudo configuration
+# Enable passwordless sudo for wheel group - required for Ansible automation
+# NixOS cloud-init doesn't support Proxmox cipassword, so we use SSH keys + NOPASSWD
+security.sudo.wheelNeedsPassword = false;
+
+# Cloud-init
+services.cloud-init = {
+enable = {{ proxmox_template_cloudinit_enable | lower }};
+{% if proxmox_template_cloudinit_enable %}
+network.enable = true;
+{% endif %}
+};
+
+# QEMU guest agent
+{% if proxmox_template_qemu_agent %}
+services.qemuGuest.enable = true;
+{% endif %}
+
+{% if proxmox_template_ssh_ca_pubkey %}
+# SSH CA public key
+environment.etc."ssh/trusted-user-ca-keys.pem" = {
+mode = "0644";
+text = ''
+{{ proxmox_template_ssh_ca_pubkey }}
+'';
+};
+{% endif %}
+
+# System packages
+environment.systemPackages = with pkgs; [
+vim
+git
+wget
+curl
+htop
+python3
+rsync
+{% for package in proxmox_template_nixos_extra_packages %}
+{% if '-' in package %}
+pkgs."{{ package }}"
+{% else %}
+{{ package }}
+{% endif %}
+{% endfor %}
+];
+
+# Allow unfree packages (some dependencies may require it)
+nixpkgs.config.allowUnfree = true;
+
+# Disable documentation to save space
+documentation.enable = false;
+documentation.nixos.enable = false;
+
+# Optimize for cloud/VM environment
+services.journald.extraConfig = ''
+SystemMaxUse=100M
+MaxRetentionSec=7day
+'';
+
+# Enable experimental features for flakes support
+nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
+# Auto-optimize nix store
+nix.settings.auto-optimise-store = true;
+
+# Build resource limits — prevent OOM during the initial nixos-rebuild
+# The first rebuild runs with THIS config (no flake yet), so these limits
+# are critical for VMs with limited RAM (e.g. 4-8GB building GitLab).
+# After the first successful rebuild, the flake's common.nix takes over.
+nix.settings.cores = {{ proxmox_template_nixos_nix_cores }};
+nix.settings.max-jobs = {{ proxmox_template_nixos_nix_max_jobs }};
+
+# Binary cache — prefer downloading pre-built packages over compiling locally
+# Critical for the initial rebuild: downloading GitLab from cache uses ~200MB
+# vs compiling from source which can exceed 8GB RAM.
+nix.settings.substituters = [ "https://cache.nixos.org" ];
+nix.settings.trusted-public-keys = [ "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=" ];
+
+# Trusted users — allows wheel group to use substituters and manage store
+nix.settings.trusted-users = [ "root" "@wheel" ];
+
+{% if proxmox_template_nixos_swap_size | int > 0 %}
+# Swap file — safety net for Nix evaluation/compilation memory spikes
+swapDevices = [
+{
+device = "/var/swapfile";
+size = {{ proxmox_template_nixos_swap_size }}; # MB
+}
+];
+
+# Don't swap aggressively — only use when RAM is truly exhausted
+boot.kernel.sysctl."vm.swappiness" = 10;
+{% endif %}
+
+# Clean up old generations automatically
+nix.gc = {
+automatic = true;
+dates = "weekly";
+options = "--delete-older-than 30d";
+};
+}

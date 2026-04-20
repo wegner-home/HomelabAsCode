@@ -1,0 +1,243 @@
+---
+# Phase 4: Cluster bootstrap
+# talosctl bootstrap, health wait, kubeconfig retrieval.
+
+# ===============================================
+# Check if Cluster is Already Bootstrapped
+# ===============================================
+# NOTE: `talosctl get members` returns rc=0 even on a configured-but-not-bootstrapped
+# node (Talos API is up, etcd is not). We must also check that members actually exist
+# in the output to avoid skipping the bootstrap command.
+- name: Check if cluster is already bootstrapped
+  ansible.builtin.command: >
+    talosctl get members
+    --talosconfig {{ talos_output_dir }}/talosconfig
+    --nodes {{ talos_bootstrap_node_ip }}
+  register: _cluster_members
+  changed_when: false
+  failed_when: false
+
+- name: Check etcd service state
+  ansible.builtin.command: >
+    talosctl service etcd
+    --talosconfig {{ talos_output_dir }}/talosconfig
+    --nodes {{ talos_bootstrap_node_ip }}
+  register: _etcd_status
+  changed_when: false
+  failed_when: false
+
+# Parse results for reliable detection:
+#   - Member lines: actual data rows start with an IP (NODE column), skip header/empty
+#   - Etcd STATE: match the "^STATE" line and extract the value, avoiding false
+#     positives from EVENTS lines like "[Preparing]: Running pre state"
+- name: Parse detection results
+  ansible.builtin.set_fact:
+    _member_data_lines: >-
+      {{ _cluster_members.stdout_lines | default([])
+         | select('match', '^\d+\.\d+\.\d+\.\d+')
+         | list }}
+    _etcd_state: >-
+      {{ _etcd_status.stdout_lines | default([])
+         | select('match', '^STATE\s+')
+         | map('regex_replace', '^STATE\s+', '')
+         | first | default('Unknown') }}
+
+- name: Set bootstrap needed fact
+  ansible.builtin.set_fact:
+    _bootstrap_needed: >-
+      {{ _cluster_members.rc != 0
+         or (_member_data_lines | length == 0)
+         or _etcd_state != 'Running' }}
+
+- name: Display bootstrap state
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Cluster not yet bootstrapped — proceeding (members_rc=' + (_cluster_members.rc | string)
+         + ', member_count=' + (_member_data_lines | length | string)
+         + ', etcd_state=' + _etcd_state
+         + ')'
+         if _bootstrap_needed | bool
+         else 'Cluster already bootstrapped (etcd=' + _etcd_state
+              + ', members=' + (_member_data_lines | length | string) + ') — skipping bootstrap, will verify' }}
+
+# ===============================================
+# Bootstrap Cluster (first CP node only)
+# ===============================================
+# The bootstrap flow:
+#   1. Wait for etcd to reach "Preparing" (dependencies resolved, ready for signal)
+#   2. Issue talosctl bootstrap (may need retries if signal is dropped)
+#   3. Verify etcd transitions to "Running" (bootstrap actually took effect)
+#
+# talosctl bootstrap is fire-and-forget — it returns rc=0 even if etcd doesn't
+# process the signal. We must verify the state transition to confirm success.
+- name: Bootstrap etcd cluster
+  when: _bootstrap_needed | bool
+  block:
+    - name: Wait for etcd to be ready for bootstrap (Preparing state)
+      ansible.builtin.command: >
+        talosctl service etcd
+        --talosconfig {{ talos_output_dir }}/talosconfig
+        --nodes {{ talos_bootstrap_node_ip }}
+      register: _etcd_pre_bootstrap
+      changed_when: false
+      retries: 60
+      delay: 5
+      until: >-
+        _etcd_pre_bootstrap.stdout_lines | default([])
+        | select('match', '^STATE\s+(Preparing|Running)')
+        | list | length > 0
+
+    - name: Skip bootstrap if etcd is already Running
+      ansible.builtin.set_fact:
+        _etcd_already_running: >-
+          {{ _etcd_pre_bootstrap.stdout_lines | default([])
+             | select('match', '^STATE\s+Running')
+             | list | length > 0 }}
+
+    - name: Bootstrap with retry (attempt up to 3 times)
+      when: not (_etcd_already_running | bool)
+      block:
+        - name: "Bootstrap attempt — issue talosctl bootstrap"
+          ansible.builtin.command: >
+            talosctl bootstrap
+            --talosconfig {{ talos_output_dir }}/talosconfig
+            --nodes {{ talos_bootstrap_node_ip }}
+          register: _bootstrap_cmd
+          changed_when: _bootstrap_cmd.rc == 0
+          failed_when: >-
+            _bootstrap_cmd.rc != 0 and
+            'AlreadyExists' not in (_bootstrap_cmd.stderr | default(''))
+
+        - name: Verify etcd transitions to Running after bootstrap
+          ansible.builtin.command: >
+            talosctl service etcd
+            --talosconfig {{ talos_output_dir }}/talosconfig
+            --nodes {{ talos_bootstrap_node_ip }}
+          register: _etcd_post_bootstrap
+          changed_when: false
+          retries: 30
+          delay: 5
+          until: >-
+            _etcd_post_bootstrap.stdout_lines | default([])
+            | select('match', '^STATE\s+Running')
+            | list | length > 0
+
+    - name: Display bootstrap result
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'etcd was already Running — no bootstrap needed'
+             if _etcd_already_running | bool
+             else 'Bootstrap succeeded — etcd is Running on ' + talos_bootstrap_node_ip }}
+
+# ===============================================
+# Wait for Cluster Health
+# ===============================================
+# When cni=none, talosctl health blocks forever waiting for nodes to become
+# Ready (which requires a CNI plugin). Instead we do targeted service checks.
+- name: Wait for cluster to become healthy (full check)
+  ansible.builtin.command: >
+    talosctl health
+    --talosconfig {{ talos_output_dir }}/talosconfig
+    --nodes {{ talos_controlplane_ips | join(',') }}
+    {{ ('--worker-nodes ' + talos_worker_ips | join(',')) if talos_worker_count | int > 0 else '' }}
+    --wait-timeout {{ talos_health_timeout }}
+  register: _health_check
+  changed_when: false
+  when: talos_cni != 'none'
+
+# With cni=none: verify Talos services (etcd, kubelet, apid) are healthy
+# but skip the K8s node-ready check that would block forever.
+- name: Wait for Talos services to be healthy (cni=none)
+  when: talos_cni == 'none'
+  block:
+    - name: Wait for etcd cluster to be healthy
+      ansible.builtin.command: >
+        talosctl --talosconfig {{ talos_output_dir }}/talosconfig
+        --nodes {{ talos_controlplane_ips | first }}
+        service etcd
+      register: _etcd_svc
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: >-
+        _etcd_svc.stdout_lines | default([])
+        | select('match', '^STATE\s+Running')
+        | list | length > 0
+
+    - name: Wait for kubelet to be healthy
+      ansible.builtin.command: >
+        talosctl --talosconfig {{ talos_output_dir }}/talosconfig
+        --nodes {{ talos_controlplane_ips | first }}
+        service kubelet
+      register: _kubelet_svc
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: >-
+        _kubelet_svc.stdout_lines | default([])
+        | select('match', '^STATE\s+Running')
+        | list | length > 0
+
+- name: Display health check result
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Cluster health check passed'
+         if talos_cni != 'none'
+         else 'Talos services healthy — nodes NotReady expected (cni=none, CNI will be deployed by FluxCD)' }}
+
+# ===============================================
+# Wait for VIP to be Assigned
+# ===============================================
+# The VIP is managed by Talos via etcd leader election.
+# After etcd bootstrap, the VIP takes a few seconds to be assigned.
+# We must wait for it before retrieving kubeconfig or running kubectl/helm.
+- name: Wait for VIP to be assigned
+  ansible.builtin.command: >
+    talosctl --talosconfig {{ talos_output_dir }}/talosconfig
+    --nodes {{ talos_bootstrap_node_ip }}
+    get addresses
+  register: _vip_check
+  changed_when: false
+  retries: 30
+  delay: 5
+  until: talos_vip_ip in _vip_check.stdout
+  when: talos_vip_enabled | bool
+
+- name: Display VIP status
+  ansible.builtin.debug:
+    msg: "VIP {{ talos_vip_ip }} is assigned and reachable"
+  when: talos_vip_enabled | bool
+
+# ===============================================
+# Retrieve Kubeconfig
+# ===============================================
+- name: Retrieve kubeconfig from cluster
+  ansible.builtin.command: >
+    talosctl kubeconfig {{ talos_kubeconfig_path }}
+    --talosconfig {{ talos_output_dir }}/talosconfig
+    --nodes {{ talos_bootstrap_node_ip }}
+    --force
+  register: _kubeconfig_result
+  changed_when: true
+
+- name: Set kubeconfig file permissions
+  ansible.builtin.file:
+    path: "{{ talos_kubeconfig_path }}"
+    mode: "0600"
+    owner: "{{ ansible_user_id }}"
+    group: "{{ ansible_user_gid }}"
+
+- name: Ensure all config artifacts are owned by current user
+  ansible.builtin.file:
+    path: "{{ talos_output_dir }}"
+    state: directory
+    recurse: true
+    owner: "{{ ansible_user_id }}"
+    group: "{{ ansible_user_gid }}"
+
+- name: Display kubeconfig status
+  ansible.builtin.debug:
+    msg:
+      - "--- Bootstrap Complete ---"
+      - "Kubeconfig saved to: {{ talos_kubeconfig_path }}"
+      - "To use: export KUBECONFIG={{ talos_kubeconfig_path }}"

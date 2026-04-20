@@ -1,0 +1,15 @@
+---
+# Post-generation hook for docker-compose blueprint
+# Creates .gitkeep files in empty host directories
+
+- name: 'Post-hook — Ensure host directories have .gitkeep'
+  ansible.builtin.copy:
+    content: |
+      # Placeholder — add docker-compose.yml files in subdirectories
+      # Example: monitoring/docker-compose.yml
+    dest: '{{ blueprint_output_dir }}/hosts/{{ item.key }}/.gitkeep'
+    force: false
+    mode: '0644'
+  loop: '{{ blueprint_hosts | dict2items }}'
+  loop_control:
+    label: '{{ item.key }}'

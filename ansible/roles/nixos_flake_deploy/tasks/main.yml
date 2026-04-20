@@ -1,0 +1,62 @@
+---
+# Main tasks for nixos_flake_deploy role
+# Unified NixOS flake deployment - supports multiple flakes per host
+
+- name: Display flake deployment information
+  ansible.builtin.debug:
+    msg:
+      - 'Deploying NixOS configuration for: {{ nixos_host_fqdn }}'
+      - 'Role: {{ nixos_host_role }}'
+      - 'Flakes to deploy: {{ host_flakes | default([nixos_flake_host]) }}'
+      - 'Repository: {{ nixos_flake_repo if nixos_flake_deploy_from_repo else "local templates" }}'
+
+# ===============================================
+# Pre-flight Validation
+# ===============================================
+- name: Include pre-flight checks
+  ansible.builtin.include_tasks: preflight.yml
+  tags:
+    - preflight
+    - validation
+
+# ===============================================
+# Multi-Flake Deployment Mode
+# ===============================================
+- name: Deploy multiple flakes
+  when: host_flakes | default([]) | length > 0
+  block:
+    - name: Normalize flake list
+      ansible.builtin.set_fact:
+        normalized_flakes: >-
+          {{
+            host_flakes | map('regex_replace', '^(.*)$', '{"name": "\1"}')
+            if host_flakes | first is string
+            else host_flakes
+          }}
+
+    - name: Deploy each flake
+      ansible.builtin.include_tasks: deploy_flake.yml
+      loop: '{{ host_flakes }}'
+      loop_control:
+        loop_var: current_flake
+        label: '{{ current_flake.name if current_flake is mapping else current_flake }}'
+      tags:
+        - flake
+        - deployment
+
+# ===============================================
+# Post-deployment Validation
+# ===============================================
+- name: Include validation tasks
+  ansible.builtin.include_tasks: validate.yml
+  tags:
+    - validation
+    - verify
+
+- name: Display deployment completion
+  ansible.builtin.debug:
+    msg:
+      - 'NixOS flake deployment completed successfully!'
+      - 'Host: {{ nixos_host_fqdn }}'
+      - 'Flakes deployed: {{ host_flakes | default([nixos_flake_host]) }}'
+      - 'System generation: {{ nixos_generation.stdout | default("unknown") }}'

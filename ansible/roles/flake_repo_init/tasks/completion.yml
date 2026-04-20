@@ -1,0 +1,48 @@
+---
+# Display completion message and next steps
+
+- name: Display completion message
+  ansible.builtin.debug:
+    msg:
+      - '════════════════════════════════════════════════════════'
+      - '  NixOS Flake Repository Initialization Complete!'
+      - '════════════════════════════════════════════════════════'
+      - ''
+      - 'Repository location: {{ nix_flake_repo_path }}'
+      - "Age public key: {{ age_public_key | default('(see above)') }}"
+      - ''
+      - 'Next steps:'
+      - ''
+      - '1. Edit and encrypt secrets:'
+      - '   sops {{ nix_flake_repo_path }}/secrets/secrets.yaml'
+      - "   (Replace all 'changeme_*' values with real secrets)"
+      - ''
+      - '2. Create GitHub repository:'
+      - '   cd {{ nix_flake_repo_path }}'
+      - '   gh repo create iac-nix-configs --public --source=. --remote=origin'
+      - '   git push -u origin main'
+      - ''
+      - '3. Update Ansible inventory with your flake URL:'
+      - '   Edit: ansible/inventory/staging/host_vars/*.yml'
+      - '   Add to each host:'
+      - '   host_flakes:'
+      - '     - name: iac-config'
+      - '       url: github:YOURUSERNAME/iac-nix-configs'
+      - '       ref: main'
+      - '       flake_output: nixosConfigurations.HOSTNAME'
+      - ''
+      - '4. Deploy to hosts:'
+      - '   cd ansible'
+      - '   ansible-playbook stage_6.yml --limit <hostname>'
+      - ''
+      - '5. Verify services:'
+      - "   ansible all -m shell -a 'systemctl status prometheus-node-exporter'"
+      - "   ansible all -m shell -a 'restic-backup-status'"
+      - "   ansible all -m shell -a 'gitlab-runner verify'"
+      - ''
+      - 'Documentation:'
+      - '  README: {{ nix_flake_repo_path }}/README.md'
+      - '  Quick Start: {{ nix_flake_repo_path }}/QUICKSTART.md'
+      - '  Makefile help: cd {{ nix_flake_repo_path }} && make help'
+      - ''
+      - '════════════════════════════════════════════════════════'

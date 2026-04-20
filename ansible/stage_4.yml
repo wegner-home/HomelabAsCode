@@ -1,0 +1,100 @@
+---
+# Stage 4: Bootstrap GitLab VM (RUN THIS BEFORE STAGE 5/6!)
+# ================================================
+# This playbook MUST be run before stages 5 and 6 because:
+# 1. GitLab VM is bootstrapped using LOCAL flake files (nix_flakes)
+# 2. After GitLab is up, the flake repo is pushed to GitLab
+# 3. All OTHER VMs (admin, service, etc.) then use the GitLab-hosted repo
+#
+# Workflow Order:
+#   ansible-playbook stage_4.yml   # First - sets up GitLab + pushes flake repo
+#   ansible-playbook stage_5.yml    # Second - Kubernetes cluster
+#   ansible-playbook stage_6.yml          # Third - service VMs
+#
+# This playbook:
+# - Copies local nix_flakes to GitLab VM
+# - Applies GitLab flake configuration (using inventory_hostname as flake key)
+# - Creates GitLab groups/projects via API
+# - Pushes the flake repo to GitLab for other VMs to use
+
+# ===============================================
+# Play 0: Pre-connection SSH known_hosts cleanup
+# ===============================================
+- name: Stage 4 - Cleanup stale SSH known_hosts entries
+  hosts: localhost
+  gather_facts: false
+  tags:
+    - stage_4
+    - stage_4
+    - cleanup
+    - known_hosts
+  tasks:
+    - name: Remove stale SSH host keys for GitLab VMs
+      ansible.builtin.include_tasks:
+        file: '{{ playbook_dir }}/helpers/cleanup_known_hosts.yml'
+      vars:
+        _cleanup_hosts: "{{ groups['gitlab_vms'] | default([]) }}"
+
+# ===============================================
+# Play 1: Bootstrap GitLab VM
+# ===============================================
+- name: Stage 4 - Bootstrap GitLab VM
+  hosts: gitlab_vms
+  gather_facts: false # Defer until Python is available
+  become: true
+  tags:
+    - stage_4
+    - stage_4
+    - bootstrap
+    - gitlab
+    - nixos
+
+  pre_tasks:
+    - name: Bootstrap NixOS VM for Ansible
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/helpers/nixos_vm_pretasks.yml"
+      tags: ["always"]
+
+    - name: Display stage information
+      ansible.builtin.debug:
+        msg:
+          - "Starting Stage 4: Bootstrap GitLab VM (NixOS)"
+          - "Flakes to deploy: {{ host_flakes | default([]) }}"
+
+  roles:
+    # Deploy SOPS age key to remote host (required for sops-nix secrets)
+    - role: sops_age
+      vars:
+        sops_age_remote_enable: "{{ gitlab_sops_enable | default(true) }}"
+      tags:
+        - sops
+        - secrets
+
+    # Deploy NixOS configuration via flakes (reads host_flakes from host_vars)
+    - role: nixos_flake_deploy
+      tags:
+        - nixos
+        - flake
+        - deployment
+
+    # GitLab-specific post-deployment (API resources, runners, etc.)
+    - role: gitlab_configure
+      tags:
+        - gitlab
+        - ci_cd
+        - api
+
+  post_tasks:
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "Stage 4 GitLab VM bootstrap completed!"
+          - "Flakes deployed: {{ host_flakes | default([]) }}"
+          - "GitLab deployed and configured via NixOS flake"
+          - 'Container registry: {{ "Enabled" if gitlab_enable_registry | default(true) else "Disabled" }}'
+          - 'GitLab Runners: {{ "Configured" if gitlab_runner_enable | default(true) else "Disabled" }}'
+          - "GitLab resources (groups, projects, users) created via API"
+          - ""
+          - 'Access GitLab: {{ gitlab_external_url | default("https://gitlab." + global_domain) }}'
+          - ""
+          - "Next step: Run Stage 5 - make nix-stage-5-talos (or skip to Stage 6)"

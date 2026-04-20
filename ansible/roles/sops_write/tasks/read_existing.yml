@@ -1,0 +1,30 @@
+---
+# read_existing.yml — Load existing SOPS-encrypted secrets, or init empty dict
+#
+# Sets _sops_write_existing (dict) for use by merge_and_write.yml.
+# All tasks delegate to localhost since the SOPS file lives on the controller.
+
+- name: Check if SOPS secrets file exists
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: '{{ sops_write_file }}'
+  register: _sops_write_file_stat
+
+- name: Load existing secrets from SOPS file
+  delegate_to: localhost
+  become: false
+  community.sops.load_vars:
+    file: '{{ sops_write_file }}'
+    name: _sops_write_existing
+    age_keyfile: '{{ sops_write_age_keyfile }}'
+    expressions: ignore
+  environment:
+    SOPS_AGE_KEY_FILE: '{{ sops_write_age_keyfile }}'
+  when: _sops_write_file_stat.stat.exists
+  no_log: true
+
+- name: Initialize empty secrets dict if file does not exist
+  ansible.builtin.set_fact:
+    _sops_write_existing: {}
+  when: not _sops_write_file_stat.stat.exists

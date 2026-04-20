@@ -1,0 +1,32 @@
+---
+- name: Deploy the signed host certificate from CA server
+  ansible.builtin.copy:
+    src: '{{ bootstrap_ssh_cert_host_cert }}'
+    dest: '{{ bootstrap_ssh_cert_host_cert }}'
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+  delegate_to: '{{ bootstrap_ssh_cert_ca_server }}'
+  become: true
+
+- name: Configure sshd_config for host certificate
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?({{ item.regexp }})'
+    line: '{{ item.line }}'
+    state: present
+    backup: true
+  loop:
+    - {
+        regexp: 'HostKey /etc/ssh/ssh_host_ed25519_key',
+        line: 'HostKey {{ bootstrap_ssh_cert_host_key_path }}',
+        state: present,
+      }
+    - {
+        regexp: 'HostCertificate',
+        line: 'HostCertificate {{ bootstrap_ssh_cert_host_cert }}',
+        state: present,
+      }
+  notify: Restart ssh
+  become: true

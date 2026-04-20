@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: Unified NixOS flake deployment — supports multiple flakes per host from remote Git repos or local templates, with post-deploy validation
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: GenericLinux
+      versions:
+        - all
+
+dependencies: []

@@ -1,0 +1,39 @@
+# Auto-generated DHCP and DNS reservations for standalone devices
+# Generated on: {{ (ansible_facts | default({})).get('date_time', {}).get('iso8601', 'unknown') }}
+# Source: ansible/roles/tf_build_inv_nix
+#
+# DO NOT EDIT MANUALLY - Changes will be overwritten
+# These are for devices not managed by Terraform (IoT, network devices, etc.)
+# Modify inventory group_vars and regenerate using: make nix-stage-2
+
+reservations_ansible = {
+{% set _reservations = opnsense_kea_reservations | default({}, true) %}
+{% if _reservations | length > 0 %}
+{% for reservation_name, reservation_config in _reservations.items() %}
+  "{{ reservation_name }}" = {
+    hostname      = "{{ reservation_config.hostname }}"
+
+    # Multiple DNS hostnames support
+{% if reservation_config.dns_hostnames is defined and reservation_config.dns_hostnames | length > 0 %}
+    dns_hostnames = [
+{% for hostname in reservation_config.dns_hostnames %}
+      "{{ hostname }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+    ]
+{% else %}
+    dns_hostnames = ["{{ reservation_config.hostname }}"]
+{% endif %}
+
+    ip_address    = "{{ reservation_config.ip_address }}"
+    mac_address   = "{{ reservation_config.mac_address }}"
+    subnet_key    = "{{ reservation_config.subnet_key }}"
+    description   = "{{ reservation_config.description | default('') }}"
+    dns_enabled   = {{ reservation_config.dns_enabled | default(true) | lower }}
+    dhcp_enabled  = {{ reservation_config.dhcp_enabled | default(true) | lower }}
+  }{{ "," if not loop.last else "" }}
+
+{% endfor %}
+{% else %}
+  # No standalone reservations defined
+{% endif %}
+}

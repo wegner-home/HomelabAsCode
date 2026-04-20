@@ -1,0 +1,140 @@
+---
+# tasks file for inventory_loader role
+# Loads and categorizes VM definitions from Ansible inventory host_vars
+#
+# Output facts (set at host scope, persist for downstream roles):
+#   inventory_builder_all_hosts:       dict of ALL hosts with unified structure
+#   inventory_builder_nixos_vms:       dict of NixOS VMs only
+#   inventory_builder_talos_cp:        dict of Talos controlplane nodes
+#   inventory_builder_talos_worker:    dict of Talos worker nodes
+#   inventory_builder_all_vms:         legacy alias for NixOS VM configs
+#   inventory_builder_host_vars_map:   legacy hostname → source file map
+#   inventory_builder_default_sshkeys: service user SSH public key content
+
+# -----------------------------------------------
+# SSH Key Loading (for cloud-init defaults)
+# -----------------------------------------------
+- name: Read service user SSH public key for cloud-init
+  when: inventory_builder_include_service_user_ssh_key | default(true)
+  block:
+    - name: Check if service user SSH public key exists
+      ansible.builtin.stat:
+        path: "{{ inventory_builder_service_user_ssh_pubkey }}"
+      register: inventory_builder_service_ssh_key_stat
+      delegate_to: localhost
+      run_once: true
+
+    - name: Read service user SSH public key
+      ansible.builtin.slurp:
+        src: "{{ inventory_builder_service_user_ssh_pubkey }}"
+      register: inventory_builder_service_ssh_key_content
+      delegate_to: localhost
+      run_once: true
+      when: inventory_builder_service_ssh_key_stat.stat.exists
+
+    - name: Set service user SSH key fact
+      ansible.builtin.set_fact:
+        inventory_builder_default_sshkeys: "{{ inventory_builder_service_ssh_key_content.content | b64decode | trim }}"
+      when: inventory_builder_service_ssh_key_stat.stat.exists
+      run_once: true
+
+    - name: Display service user SSH key status
+      ansible.builtin.debug:
+        msg: "{{ 'Service user SSH key loaded from: ' + inventory_builder_service_user_ssh_pubkey if inventory_builder_service_ssh_key_stat.stat.exists else 'WARNING: Service user SSH key not found at ' + inventory_builder_service_user_ssh_pubkey + '. Run stage_0 first.' }}"
+      run_once: true
+
+# Ensure ansible_env and ansible_date_time are available
+- name: Ensure minimal facts are available
+  ansible.builtin.setup:
+    filter: "ansible_env,ansible_date_time"
+  run_once: true
+
+# -----------------------------------------------
+# Unified Host Vars Loading (SINGLE SCAN)
+# -----------------------------------------------
+- name: Resolve active inventory directory
+  ansible.builtin.set_fact:
+    inventory_builder_inventory_path: >-
+      {{ (inventory_builder_inventory_path | default(inventory_dir, true))
+         | regex_replace('/+$', '') }}
+    inventory_builder_host_vars_path: >-
+      {{ ((inventory_builder_inventory_path | default(inventory_dir, true))
+         | regex_replace('/+$', '')) ~ '/host_vars' }}
+  run_once: true
+
+- name: Validate resolved host_vars directory exists
+  ansible.builtin.stat:
+    path: "{{ inventory_builder_host_vars_path }}"
+  register: inventory_builder_host_vars_dir_stat
+  delegate_to: localhost
+  run_once: true
+
+- name: Fail if host_vars directory cannot be found
+  ansible.builtin.assert:
+    that:
+      - inventory_builder_host_vars_dir_stat.stat.exists
+      - inventory_builder_host_vars_dir_stat.stat.isdir
+    fail_msg: >-
+      Could not find inventory host_vars directory at
+      '{{ inventory_builder_host_vars_path }}'.
+      Resolved inventory path: '{{ inventory_builder_inventory_path }}'.
+      Ensure playbook is run with the intended -i inventory path, or set
+      inventory_builder_inventory_path explicitly.
+  run_once: true
+
+- name: Find all host_vars files in inventory
+  ansible.builtin.find:
+    paths: "{{ inventory_builder_host_vars_path }}"
+    patterns: "*.yml,*.yaml"
+    recurse: true
+    excludes: ".*"
+  register: inventory_builder_host_vars_files
+  delegate_to: localhost
+  run_once: true
+
+- name: Fail if no host_vars files were discovered
+  ansible.builtin.assert:
+    that:
+      - inventory_builder_host_vars_files.files | length > 0
+    fail_msg: >-
+      No host_vars files found in '{{ inventory_builder_host_vars_path }}'.
+      This would cause an empty/partial Stage 2 generation. Check inventory
+      selection and host_vars layout.
+  run_once: true
+
+- name: Display found host_vars files
+  ansible.builtin.debug:
+    msg: "Found {{ inventory_builder_host_vars_files.files | length }} host_vars files"
+  run_once: true
+
+- name: Initialize unified host collection
+  ansible.builtin.set_fact:
+    inventory_builder_all_hosts: {}
+  run_once: true
+
+- name: Load and categorize ALL VM definitions (NixOS + Talos)
+  ansible.builtin.include_tasks:
+    file: _load_all_hostvars.yml
+  loop: "{{ inventory_builder_host_vars_files.files }}"
+  loop_control:
+    label: "{{ _hostvar_file.path | basename }}"
+    loop_var: _hostvar_file
+
+- name: Derive convenience views and legacy aliases
+  ansible.builtin.include_tasks:
+    file: _derive_host_views.yml
+
+# -----------------------------------------------
+# Ensure output directories exist
+# -----------------------------------------------
+- name: Ensure all output directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ inventory_builder_project_owner }}"
+    group: "{{ inventory_builder_project_group }}"
+    mode: "0755"
+  loop:
+    - "{{ inventory_builder_project_dir }}"
+    - "{{ inventory_builder_flakes_dir }}"
+  run_once: true

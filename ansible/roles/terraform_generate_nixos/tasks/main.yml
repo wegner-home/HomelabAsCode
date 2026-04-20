@@ -1,0 +1,56 @@
+---
+# tasks file for terraform_generate_nixos role
+# Generates NixOS VM Terraform variable files (tfvars) from inventory data.
+#
+# Prerequisites:
+#   inventory_loader must have run first to populate:
+#     inventory_builder_all_vms       — NixOS VM configs (legacy format)
+#     inventory_builder_default_sshkeys — SSH public key for cloud-init
+#
+# Output files (in inventory_builder_project_dir):
+#   - nixos-vms_ansible.auto.tfvars    — VM definitions for Proxmox provider
+#   - opnsense-subnets_ansible.auto.tfvars — OPNsense subnet/DHCP config
+#   - opnsense-reservations_ansible.auto.tfvars — OPNsense DHCP reservations
+#   - terraform.tfvars                  — Proxmox API credentials + global settings
+
+- name: Validate inventory data is loaded
+  ansible.builtin.assert:
+    that:
+      - inventory_builder_all_vms is defined
+    fail_msg: >-
+      inventory_builder_all_vms is not defined.
+      The inventory_loader role must run before terraform_generate_nixos.
+    success_msg: 'Inventory data available ({{ inventory_builder_all_vms | length }} NixOS VMs)'
+
+- name: Generate NixOS VM Terraform configs
+  when:
+    - inventory_builder_generate_nixos_vms | default(true)
+    - inventory_builder_all_vms | default({}) | length > 0
+  block:
+    - name: Display NixOS VM count
+      ansible.builtin.debug:
+        msg: 'Generating Terraform configs for {{ inventory_builder_all_vms | length }} NixOS VMs'
+      run_once: true
+
+    - name: Generate NixOS Terraform variable files
+      ansible.builtin.template:
+        src: '{{ item }}'
+        dest: "{{ inventory_builder_project_dir }}/{{ item | basename | regex_replace('\\.j2$', '') }}"
+        owner: '{{ inventory_builder_project_owner }}'
+        group: '{{ inventory_builder_project_group }}'
+        mode: '0644'
+      loop:
+        - 'terraform/nixos-vms_ansible.auto.tfvars.j2'
+        - 'terraform/opnsense-subnets_ansible.auto.tfvars.j2'
+        - 'terraform/opnsense-reservations_ansible.auto.tfvars.j2'
+        - 'terraform/terraform.tfvars.j2'
+      run_once: true
+      loop_control:
+        label: '{{ item | basename }}'
+
+    - name: Display generated NixOS Terraform files
+      ansible.builtin.debug:
+        msg:
+          - 'NixOS Terraform configs generated in: {{ inventory_builder_project_dir }}'
+          - 'Files: nixos-vms_ansible.auto.tfvars, opnsense-*.auto.tfvars, terraform.tfvars'
+      run_once: true

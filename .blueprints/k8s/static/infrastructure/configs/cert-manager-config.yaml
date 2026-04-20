@@ -1,0 +1,17 @@
+---
+# Self-signed ClusterIssuer for internal certificates
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+spec:
+  selfSigned: {}
+---
+# CA Issuer - create a self-signed CA for internal use
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: ca-issuer
+spec:
+  ca:
+    secretName: ca-key-pair

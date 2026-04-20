@@ -1,0 +1,9 @@
+# System extensions patch — applied to ALL nodes
+# Declares install extensions for persistence across upgrades.
+# Image refs derived from structured talos_extensions: ghcr.io/<name>:<version>
+machine:
+  install:
+    extensions:
+{% for ext in talos_extensions %}
+      - image: ghcr.io/{{ ext.name }}:{{ ext.version }}
+{% endfor %}

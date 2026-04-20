@@ -1,0 +1,15 @@
+---
+# defaults for proxmox_cluster role
+
+# Set to false to skip cluster formation even when the node is in proxmox_cluster group
+proxmox_cluster_enabled: true
+
+# Override auto-detected cluster name (defaults to the child group name of proxmox_cluster)
+proxmox_cluster_name: ''
+
+# Groups to ignore when auto-detecting the cluster child group
+proxmox_cluster_skip_groups:
+  - proxmox_cluster
+  - proxmox_nodes
+  - all
+  - ungrouped

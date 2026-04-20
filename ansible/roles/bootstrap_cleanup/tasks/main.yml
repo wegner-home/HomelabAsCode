@@ -1,0 +1,9 @@
+---
+# tasks file for bootstrap_cleanup role
+
+# New Inventory strategy should just be a permanent identfier for each host that was bootrstrapped.
+#- name: Ansible Inventory Management
+#  ansible.builtin.include_tasks: ansible_inventory_mngmt.yml
+
+- name: Configure local SSH client
+  ansible.builtin.include_tasks: configure_ssh_client.yml

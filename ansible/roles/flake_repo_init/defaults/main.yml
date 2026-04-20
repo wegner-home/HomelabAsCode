@@ -1,0 +1,21 @@
+---
+# Defaults for flake_repo_init role
+
+# Path to the NixOS flake repository on the Ansible controller
+# REQUIRED — must be defined in group_vars/all/main.yml (no default; fails loudly if unset)
+# nix_flake_repo_path: <set in inventory>
+
+# Git configuration
+nix_flake_repo_git_init: true
+nix_flake_repo_git_commit_message: 'Initial commit: NixOS configurations'
+
+# SOPS/age configuration
+nix_flake_repo_age_key_dir: '{{ ansible_env.HOME }}/.config/sops/age'
+nix_flake_repo_age_key_file: '{{ nix_flake_repo_age_key_dir }}/keys.txt'
+
+# Flake validation
+nix_flake_repo_validate: true
+
+# GitHub remote (optional - set in inventory if desired)
+nix_flake_repo_github_url: '' # e.g., "git@github.com:username/iac-nix-configs.git"
+nix_flake_repo_github_create: false # Set true to create via gh CLI

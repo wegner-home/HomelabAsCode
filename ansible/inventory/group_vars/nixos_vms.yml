@@ -1,0 +1,77 @@
+# ===============================================
+# NixOS Settings
+# ===============================================
+nixos_channel: "nixos-unstable"
+
+# ===============================================
+# Ansible Interpreter Settings (NixOS compatibility)
+# ===============================================
+ansible_python_interpreter: auto_silent
+
+# Variables specific to NixOS VMs
+
+# ===============================================
+# Ansible Connection (centralized for all NixOS VMs)
+# ===============================================
+ansible_user: "{{ global_service_user }}"
+ansible_ssh_private_key_file: "{{ global_ssh_base_dir }}/users/{{ global_service_user }}/id_ed25519"
+
+nixos_enable_flakes: true
+nixos_enable_nix_command: true
+
+nixos_base_packages:
+  - vim
+  - git
+  - htop
+  - tmux
+  - curl
+  - wget
+  - jq
+  - python3
+
+# SSH Configuration
+nixos_ssh_enable: true
+nixos_ssh_permit_root_login: "prohibit-password"
+nixos_ssh_password_authentication: false
+
+# User Management
+nixos_users:
+  - name: "{{ global_service_user }}"
+    description: "Ansible service user"
+    is_system_user: false
+    extra_groups:
+      - wheel
+    openssh_authorized_keys: []
+
+# Firewall
+nixos_firewall_enable: true
+nixos_firewall_allowed_tcp_ports:
+  - 22
+
+# Auto-updates (managed via Ansible/FluxCD)
+nixos_auto_upgrade_enable: false
+nixos_garbage_collect_enable: true
+nixos_garbage_collect_dates: "daily"
+
+# Nix Store Optimization
+nixos_nix_optimize_store: true
+nixos_nix_optimize_interval: "daily"
+
+# Monitoring & Logging
+nixos_enable_prometheus_node_exporter: true
+nixos_enable_journald: true
+
+# ===============================================
+# Prometheus Node Exporter Defaults (all NixOS VMs)
+# ===============================================
+node_exporter_enable: true
+node_exporter_port: 9100
+node_exporter_listen_address: "0.0.0.0"
+node_exporter_collectors:
+  - systemd
+  - filesystem
+  - netdev
+  - meminfo
+  - diskstats
+  - cpu
+  - loadavg

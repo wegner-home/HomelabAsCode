@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: >-
+    Persists runtime-generated secrets to a SOPS/age-encrypted YAML file.
+    Drop-in replacement for vault_nix — reads existing SOPS file, merges
+    new_secrets (without overwriting), and re-encrypts with age.
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: GenericLinux
+      versions:
+        - all
+
+dependencies: []

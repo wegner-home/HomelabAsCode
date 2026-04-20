@@ -1,0 +1,260 @@
+---
+# gitlab_runner — Create per-host runner tokens via GitLab API
+#
+# This role does NOT configure the runner service itself (that's in the NixOS flake).
+# It creates a runner instance in GitLab and writes the authentication token to disk
+# at the path referenced by registrationConfigFile in the flake config.
+#
+# Flow:
+#   1. Check if token file already exists (idempotent)
+#   2. Verify GitLab API is reachable
+#   3. Create runner via POST /api/v4/user/runners (GitLab 16+ API)
+#   4. Write authentication_token to registrationConfigFile path
+#   5. Restart gitlab-runner service to pick up the token
+#   6. Verify runner is online
+
+# ===============================================
+# Pre-flight Checks
+# ===============================================
+- name: Display runner token provisioning info
+  ansible.builtin.debug:
+    msg:
+      - '================================================'
+      - 'GitLab Runner Token Provisioning: {{ inventory_hostname }}'
+      - '================================================'
+      - 'GitLab API: {{ gitlab_runner_api_url }}'
+      - 'Runner type: {{ gitlab_runner_type }}'
+      - 'Tags: {{ gitlab_runner_tags | join(", ") }}'
+      - 'Token file: {{ gitlab_runner_token_file }}'
+  tags:
+    - runners
+    - info
+
+- name: Validate required variables
+  ansible.builtin.assert:
+    that:
+      - gitlab_runner_api_token | default('') | length > 0
+    fail_msg: >-
+      gitlab_runner_api_token is empty. Set vault_secrets.gitlab.api_token
+      or override gitlab_runner_api_token in host_vars.
+    success_msg: 'GitLab API token is set'
+  tags:
+    - runners
+    - validate
+
+# ===============================================
+# Idempotency: Check existing token
+# ===============================================
+- name: Check if runner token file already exists
+  ansible.builtin.stat:
+    path: '{{ gitlab_runner_token_file }}'
+  register: _runner_token_stat
+  tags:
+    - runners
+    - token
+
+- name: Read existing token file
+  ansible.builtin.slurp:
+    src: '{{ gitlab_runner_token_file }}'
+  register: _runner_token_content
+  when:
+    - _runner_token_stat.stat.exists
+    - gitlab_runner_skip_if_token_exists | default(true) | bool
+  failed_when: false
+  tags:
+    - runners
+    - token
+
+- name: Set token exists fact
+  ansible.builtin.set_fact:
+    _runner_token_already_exists: >-
+      {{ _runner_token_stat.stat.exists
+         and (_runner_token_content.content | default('') | b64decode | trim | length > 0) }}
+  tags:
+    - runners
+    - token
+
+- name: Skip token creation (already exists)
+  ansible.builtin.debug:
+    msg: 'Runner token file already exists at {{ gitlab_runner_token_file }} — skipping creation'
+  when: _runner_token_already_exists | bool
+  tags:
+    - runners
+    - token
+
+# ===============================================
+# GitLab API: Verify accessibility
+# ===============================================
+- name: Verify GitLab API is accessible
+  ansible.builtin.uri:
+    url: '{{ gitlab_runner_api_url }}/api/v4/version'
+    method: GET
+    validate_certs: '{{ gitlab_runner_validate_certs }}'
+    headers:
+      PRIVATE-TOKEN: '{{ gitlab_runner_api_token }}'
+    return_content: true
+  register: _gitlab_api_check
+  retries: '{{ gitlab_runner_api_retries }}'
+  delay: '{{ gitlab_runner_api_retry_delay }}'
+  until: _gitlab_api_check.status == 200
+  when:
+    - not (_runner_token_already_exists | bool)
+    - gitlab_runner_verify_api | default(true) | bool
+  delegate_to: localhost
+  tags:
+    - runners
+    - verify
+
+- name: Display GitLab version
+  ansible.builtin.debug:
+    msg: 'GitLab {{ _gitlab_api_check.json.version }} ({{ _gitlab_api_check.json.revision }})'
+  when:
+    - _gitlab_api_check is defined
+    - _gitlab_api_check.status | default(0) == 200
+  tags:
+    - runners
+    - verify
+
+# ===============================================
+# GitLab API: Create runner and get token
+# ===============================================
+# Uses GitLab 16+ POST /api/v4/user/runners endpoint
+# Docs: https://docs.gitlab.com/ee/api/users.html#create-a-runner-linked-to-a-user
+- name: Create runner via GitLab API
+  ansible.builtin.uri:
+    url: '{{ gitlab_runner_api_url }}/api/v4/user/runners'
+    method: POST
+    validate_certs: '{{ gitlab_runner_validate_certs }}'
+    headers:
+      PRIVATE-TOKEN: '{{ gitlab_runner_api_token }}'
+    body_format: json
+    body:
+      runner_type: '{{ gitlab_runner_type }}'
+      description: '{{ gitlab_runner_description }}'
+      tag_list: '{{ gitlab_runner_tags | join(",") }}'
+      run_untagged: '{{ gitlab_runner_run_untagged }}'
+      locked: '{{ gitlab_runner_locked }}'
+      access_level: '{{ gitlab_runner_access_level }}'
+      maximum_timeout: '{{ gitlab_runner_maximum_timeout }}'
+    status_code: [201]
+    return_content: true
+  register: _runner_create_result
+  when: not (_runner_token_already_exists | bool)
+  delegate_to: localhost
+  tags:
+    - runners
+    - token
+    - create
+
+- name: Display created runner info
+  ansible.builtin.debug:
+    msg:
+      - 'Runner created successfully for {{ inventory_hostname }}'
+      - 'Runner ID: {{ _runner_create_result.json.id }}'
+      - 'Token prefix: {{ _runner_create_result.json.token[:8] }}...'
+  when:
+    - _runner_create_result is defined
+    - _runner_create_result.status | default(0) == 201
+  tags:
+    - runners
+    - token
+
+# ===============================================
+# Write token to target host
+# ===============================================
+- name: Ensure runner token directory exists
+  ansible.builtin.file:
+    path: '{{ gitlab_runner_token_file | dirname }}'
+    state: directory
+    owner: '{{ gitlab_runner_token_file_owner }}'
+    group: '{{ gitlab_runner_token_file_group }}'
+    mode: '0750'
+  when: not (_runner_token_already_exists | bool)
+  tags:
+    - runners
+    - token
+
+# The registrationConfigFile is a TOML file with the token
+# Format expected by NixOS gitlab-runner service:
+#   CI_SERVER_URL = "https://gitlab.example.com"
+#   REGISTRATION_TOKEN = "<token>"   (legacy, pre-16)
+#   -- OR for GitLab 16+ --
+#   CI_SERVER_URL = "https://gitlab.example.com"
+#   CI_SERVER_TOKEN = "<authentication_token>"
+- name: Write runner token file
+  ansible.builtin.copy:
+    content: |
+      CI_SERVER_URL="{{ gitlab_runner_api_url }}"
+      CI_SERVER_TOKEN="{{ _runner_create_result.json.token }}"
+    dest: '{{ gitlab_runner_token_file }}'
+    owner: '{{ gitlab_runner_token_file_owner }}'
+    group: '{{ gitlab_runner_token_file_group }}'
+    mode: '{{ gitlab_runner_token_file_mode }}'
+  when:
+    - not (_runner_token_already_exists | bool)
+    - _runner_create_result is defined
+    - _runner_create_result.status | default(0) == 201
+  notify: restart gitlab-runner
+  tags:
+    - runners
+    - token
+
+# ===============================================
+# Post-deployment verification
+# ===============================================
+- name: Restart gitlab-runner to pick up new token
+  ansible.builtin.systemd:
+    name: gitlab-runner.service
+    state: restarted
+    enabled: true
+  when:
+    - not (_runner_token_already_exists | bool)
+    - _runner_create_result is defined
+    - _runner_create_result.status | default(0) == 201
+  tags:
+    - runners
+    - verify
+
+- name: Wait for runner to connect
+  ansible.builtin.pause:
+    seconds: 5
+  when:
+    - not (_runner_token_already_exists | bool)
+    - _runner_create_result is defined
+    - _runner_create_result.status | default(0) == 201
+  tags:
+    - runners
+    - verify
+
+- name: Verify runner is registered in GitLab
+  ansible.builtin.uri:
+    url: '{{ gitlab_runner_api_url }}/api/v4/runners/{{ _runner_create_result.json.id }}'
+    method: GET
+    validate_certs: '{{ gitlab_runner_validate_certs }}'
+    headers:
+      PRIVATE-TOKEN: '{{ gitlab_runner_api_token }}'
+    return_content: true
+  register: _runner_verify_result
+  when:
+    - not (_runner_token_already_exists | bool)
+    - _runner_create_result is defined
+    - _runner_create_result.status | default(0) == 201
+  delegate_to: localhost
+  failed_when: false
+  tags:
+    - runners
+    - verify
+
+- name: Display verification summary
+  ansible.builtin.debug:
+    msg:
+      - '================================================'
+      - 'Runner Token Summary: {{ inventory_hostname }}'
+      - '================================================'
+      - '{{ "✓ Token already existed" if (_runner_token_already_exists | bool) else "✓ New token created and deployed" }}'
+      - 'Token file: {{ gitlab_runner_token_file }}'
+      - '{{ "Runner ID: " + (_runner_create_result.json.id | string) if (_runner_create_result is defined and _runner_create_result.status | default(0) == 201) else "" }}'
+      - '{{ "Status: " + (_runner_verify_result.json.status | default("unknown")) if (_runner_verify_result is defined and _runner_verify_result.status | default(0) == 200) else "" }}'
+  tags:
+    - runners
+    - info

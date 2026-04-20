@@ -1,0 +1,46 @@
+---
+# Post-generation hook for nix-flakes blueprint
+# Handles role-specific NixOS module generation (admin.nix, docker.nix, gitlab.nix)
+
+- name: 'Post-hook — Identify hosts with nixos_template roles'
+  ansible.builtin.set_fact:
+    _role_hosts: >-
+      {{ blueprint_hosts | dict2items
+         | selectattr('value.nixos_template', 'defined')
+         | selectattr('value.nixos_template', 'in', ['admin-vm', 'docker-vm', 'gitlab-vm'])
+         | list }}
+
+- name: 'Post-hook — Display role-specific hosts'
+  ansible.builtin.debug:
+    msg: 'Hosts with role templates: {{ _role_hosts | map(attribute="key") | list | join(", ") | default("none") }}'
+
+- name: 'Post-hook — Generate role-specific modules'
+  when: _role_hosts | length > 0
+  block:
+    - name: 'Render role-specific .nix module for each host'
+      ansible.builtin.template:
+        src: "{{ blueprint_source_dir }}/templates/hosts/_host_/roles/{{ item.value.nixos_template | regex_replace('-vm$', '') }}.nix.j2"
+        dest: "{{ blueprint_output_dir }}/hosts/{{ item.key }}/{{ item.value.nixos_template | regex_replace('-vm$', '') }}.nix"
+        owner: '{{ blueprint_file_owner | default(omit) }}'
+        group: '{{ blueprint_file_group | default(omit) }}'
+        mode: '0644'
+      vars:
+        vm_name: '{{ item.key }}'
+        vm_config: '{{ item.value }}'
+        blueprint_host_context:
+          host_name: '{{ item.key }}'
+          host_config: '{{ item.value }}'
+          repo_context: '{{ blueprint_repo_context }}'
+      loop: '{{ _role_hosts }}'
+      loop_control:
+        label: '{{ item.key }} ({{ item.value.nixos_template }})'
+
+    - name: 'Update configuration.nix to import role module'
+      ansible.builtin.lineinfile:
+        path: '{{ blueprint_output_dir }}/hosts/{{ item.key }}/configuration.nix'
+        insertafter: '^  imports = \['
+        line: "    ./{{ item.value.nixos_template | regex_replace('-vm$', '') }}.nix"
+        state: present
+      loop: '{{ _role_hosts }}'
+      loop_control:
+        label: '{{ item.key }}'

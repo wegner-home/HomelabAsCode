@@ -1,0 +1,106 @@
+---
+# Phase 5: Kubernetes verification
+# Verifies nodes, system pods, core workloads.
+
+# ===============================================
+# Set KUBECONFIG for all kubectl commands
+# ===============================================
+- name: Set KUBECONFIG environment fact
+  ansible.builtin.set_fact:
+    _kubeconfig_env:
+      KUBECONFIG: "{{ talos_kubeconfig_path }}"
+
+# ===============================================
+# Verify Kubernetes API
+# ===============================================
+- name: Verify Kubernetes API is reachable
+  ansible.builtin.command: kubectl cluster-info
+  environment: "{{ _kubeconfig_env }}"
+  register: _cluster_info
+  changed_when: false
+  retries: 12
+  delay: 10
+  until: _cluster_info.rc == 0
+
+- name: Display cluster info
+  ansible.builtin.debug:
+    msg: "{{ _cluster_info.stdout_lines }}"
+
+# ===============================================
+# Verify All Nodes Are Ready
+# ===============================================
+- name: Get node status
+  ansible.builtin.command: kubectl get nodes -o json
+  environment: "{{ _kubeconfig_env }}"
+  register: _nodes_json
+  changed_when: false
+
+- name: Parse node statuses
+  ansible.builtin.set_fact:
+    _node_list: "{{ (_nodes_json.stdout | from_json)['items'] }}"
+
+- name: Verify expected node count
+  ansible.builtin.assert:
+    that:
+      - _node_list | length == (talos_controlplane_count | int + talos_worker_count | int)
+    fail_msg: >
+      Expected {{ talos_controlplane_count | int + talos_worker_count | int }} nodes,
+      found {{ _node_list | length }}
+    quiet: true
+
+- name: Verify all nodes are Ready
+  ansible.builtin.assert:
+    that:
+      - item.status.conditions |
+        selectattr('type', 'eq', 'Ready') |
+        selectattr('status', 'eq', 'True') |
+        list | length > 0
+    fail_msg: "Node {{ item.metadata.name }} is not Ready"
+    quiet: true
+  loop: "{{ _node_list }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Display node summary
+  ansible.builtin.debug:
+    msg: >-
+      Node {{ item.metadata.name }}:
+      {{ item.status.conditions |
+         selectattr('type', 'eq', 'Ready') |
+         map(attribute='status') | first }} —
+      {{ item.status.nodeInfo.kubeletVersion }}
+  loop: "{{ _node_list }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+# ===============================================
+# Verify kube-system Pods
+# ===============================================
+- name: Get kube-system pods
+  ansible.builtin.command: kubectl get pods -n kube-system -o json
+  environment: "{{ _kubeconfig_env }}"
+  register: _kube_system_pods
+  changed_when: false
+
+- name: Parse kube-system pod statuses
+  ansible.builtin.set_fact:
+    _kube_system_list: "{{ (_kube_system_pods.stdout | from_json)['items'] }}"
+
+- name: Check for non-running kube-system pods
+  ansible.builtin.set_fact:
+    _unhealthy_pods: >-
+      {{ _kube_system_list |
+         rejectattr('status.phase', 'in', ['Running', 'Succeeded']) |
+         map(attribute='metadata.name') | list }}
+
+- name: Warn about unhealthy kube-system pods
+  ansible.builtin.debug:
+    msg: "WARNING: Unhealthy kube-system pods: {{ _unhealthy_pods | join(', ') }}"
+  when: _unhealthy_pods | length > 0
+
+- name: Display kube-system pod summary
+  ansible.builtin.debug:
+    msg:
+      - "--- Kubernetes Verification ---"
+      - "Nodes: {{ _node_list | length }}/{{ talos_controlplane_count | int + talos_worker_count | int }} Ready"
+      - "kube-system pods: {{ _kube_system_list | length }} total, {{ _unhealthy_pods | length }} unhealthy"

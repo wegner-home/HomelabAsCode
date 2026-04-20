@@ -1,0 +1,14 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: >-
+    Proxmox cluster formation — discovers topology from inventory groups,
+    exchanges SSH keys between peers, creates or joins a Proxmox cluster.
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+
+dependencies: []

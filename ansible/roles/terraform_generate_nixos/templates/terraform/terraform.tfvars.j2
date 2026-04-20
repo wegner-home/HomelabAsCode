@@ -1,0 +1,20 @@
+# Auto-generated Terraform variables for provider credentials
+# Generated on: {{ (ansible_facts | default({})).get('date_time', {}).get('iso8601', 'unknown') }}
+# Source: ansible/roles/tf_build_inv_nix
+#
+# DO NOT EDIT MANUALLY - Changes will be overwritten
+# Provider secrets are NOT written to this file.
+# Supply secrets at runtime (SOPS-driven workflow), e.g. via TF_VAR_*.
+
+# ===============================================
+# Proxmox Provider Configuration
+# ===============================================
+pm_api_uri    = "{{ tf_build_inv_nix_pm_api_url }}"
+sops_secrets_file = "{{ global_sops_secrets_file }}"
+sops_runtime_file = "{{ global_sops_runtime_file | default('', true) }}"
+proxmox_auth_node = "cluster"
+
+# ===============================================
+# OPNsense Provider Configuration
+# ===============================================
+opnsense_uri    = "{{ tf_build_inv_nix_opnsense_api_url }}"

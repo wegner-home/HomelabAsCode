@@ -1,0 +1,73 @@
+---
+# Manage user SSH keys and certificates
+
+- name: Ensure user-specific certificate directory exists for {{ ssh_user_item.name }}
+  become: true
+  ansible.builtin.file:
+    path: '{{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}'
+    state: directory
+    mode: '0770'
+    owner: '{{ _resolved_owner }}'
+
+- name: Check if private key exists for {{ ssh_user_item.name }}
+  ansible.builtin.stat:
+    path: '{{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}/id_ed25519'
+  register: ssh_user_private_key_stat
+
+- name: Generate SSH key pair for {{ ssh_user_item.name }}
+  become: true
+  community.crypto.openssh_keypair:
+    path: '{{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}/id_ed25519'
+    type: ed25519
+    mode: '0600'
+    owner: '{{ _resolved_owner }}'
+    comment: '{{ ssh_user_item.name }}@{{ project_name }}'
+    force: false
+  when: not ssh_user_private_key_stat.stat.exists
+
+- name: Check if certificate exists for {{ ssh_user_item.name }}
+  ansible.builtin.stat:
+    path: '{{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}/id_ed25519-cert.pub'
+  register: ssh_user_cert_stat
+
+- name: Sign SSH public key with User CA for {{ ssh_user_item.name }}
+  become: true
+  ansible.builtin.shell: |
+    ssh-keygen -s "{{ ssh_user_user_ca_dir }}/{{ ssh_user_user_ca_key_name }}" \
+      -I "{{ ssh_user_item.name }}@{{ project_name }}" \
+      -n "{{ ssh_user_item.principals | join(',') }}" \
+      -V "{{ ssh_user_user_cert_validity }}" \
+      "{{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}/id_ed25519.pub"
+  args:
+    creates: '{{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}/id_ed25519-cert.pub'
+  when: not ssh_user_cert_stat.stat.exists
+
+- name: Set permissions on private key for {{ ssh_user_item.name }}
+  become: true
+  ansible.builtin.file:
+    path: '{{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}/id_ed25519'
+    owner: '{{ _resolved_owner }}'
+    mode: '0600'
+
+- name: Set permissions on public key for {{ ssh_user_item.name }}
+  become: true
+  ansible.builtin.file:
+    path: '{{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}/id_ed25519.pub'
+    owner: '{{ _resolved_owner }}'
+    mode: '0644'
+
+- name: Set permissions on certificate for {{ ssh_user_item.name }}
+  become: true
+  ansible.builtin.file:
+    path: '{{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}/id_ed25519-cert.pub'
+    owner: '{{ _resolved_owner }}'
+    mode: '0644'
+  when: ssh_user_cert_stat.stat.exists or not ssh_user_cert_stat.stat.exists
+
+- name: Display certificate info for {{ ssh_user_item.name }}
+  ansible.builtin.debug:
+    msg:
+      - 'User: {{ ssh_user_item.name }}'
+      - 'Key: {{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}/id_ed25519'
+      - 'Cert: {{ ssh_user_cert_dir }}/{{ ssh_user_item.name }}/id_ed25519-cert.pub'
+      - 'Principals: {{ ssh_user_item.principals | join(", ") }}'

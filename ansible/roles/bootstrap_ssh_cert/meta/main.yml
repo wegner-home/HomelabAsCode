@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: Generates SSH host keys, signs them with the CA, and deploys host certificates with correct permissions
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: GenericLinux
+      versions:
+        - all
+
+dependencies: []

@@ -1,0 +1,101 @@
+---
+# SSH client configuration tasks
+
+- name: Ensure SSH directory exists
+  ansible.builtin.file:
+    path: '{{ ssh_user_ssh_dir }}'
+    state: directory
+    mode: '0700'
+
+- name: Copy SSH private key to user's .ssh directory
+  ansible.builtin.copy:
+    src: '{{ ssh_user_cert_dir }}/{{ ssh_user_default_user }}/id_ed25519'
+    dest: '{{ ssh_user_ssh_dir }}/id_ed25519'
+    owner: '{{ _resolved_owner }}'
+    mode: '0600'
+    remote_src: true
+
+- name: Copy SSH public key to user's .ssh directory
+  ansible.builtin.copy:
+    src: '{{ ssh_user_cert_dir }}/{{ ssh_user_default_user }}/id_ed25519.pub'
+    dest: '{{ ssh_user_ssh_dir }}/id_ed25519.pub'
+    owner: '{{ _resolved_owner }}'
+    mode: '0644'
+    remote_src: true
+
+- name: Copy SSH certificate to user's .ssh directory
+  ansible.builtin.copy:
+    src: '{{ ssh_user_cert_dir }}/{{ ssh_user_default_user }}/id_ed25519-cert.pub'
+    dest: '{{ ssh_user_ssh_dir }}/id_ed25519-cert.pub'
+    owner: '{{ _resolved_owner }}'
+    mode: '0644'
+    remote_src: true
+
+# ===============================================
+# Copy CA public keys for distribution
+# ===============================================
+- name: Copy User CA public key to user's .ssh directory
+  ansible.builtin.copy:
+    src: '{{ ssh_user_user_ca_dir }}/{{ ssh_user_user_ca_key_name }}.pub'
+    dest: '{{ ssh_user_ssh_dir }}/{{ ssh_user_user_ca_key_name }}.pub'
+    owner: '{{ _resolved_owner }}'
+    mode: '0644'
+    remote_src: true
+
+- name: Copy Host CA public key to user's .ssh directory
+  ansible.builtin.copy:
+    src: '{{ ssh_user_host_ca_dir }}/{{ ssh_user_host_ca_key_name }}.pub'
+    dest: '{{ ssh_user_ssh_dir }}/{{ ssh_user_host_ca_key_name }}.pub'
+    owner: '{{ _resolved_owner }}'
+    mode: '0644'
+    remote_src: true
+
+# ===============================================
+# SSH Client Configuration
+# ===============================================
+- name: Configure SSH client to use certificate
+  ansible.builtin.blockinfile:
+    path: '{{ ssh_user_client_config_path }}'
+    create: true
+    mode: '0600'
+    marker: '# {mark} ANSIBLE MANAGED BLOCK - SSH Certificate'
+    block: |
+      # Use certificate-based authentication
+      Host *.{{ global_domain }}
+        IdentityFile {{ ssh_user_ssh_dir }}/id_ed25519
+        CertificateFile {{ ssh_user_ssh_dir }}/id_ed25519-cert.pub
+        # Host CA public key is in known_hosts with @cert-authority
+
+      # Default key for other hosts
+      Host *
+        IdentityFile {{ ssh_user_ssh_dir }}/id_ed25519
+
+# ===============================================
+# Trust Host CA in known_hosts
+# ===============================================
+- name: Read Host CA public key
+  ansible.builtin.slurp:
+    src: '{{ ssh_user_host_ca_dir }}/{{ ssh_user_host_ca_key_name }}.pub'
+  register: ssh_host_ca_public_key
+
+- name: Trust the Host CA in known_hosts
+  ansible.builtin.lineinfile:
+    path: '{{ ssh_user_ssh_dir }}/known_hosts'
+    create: true
+    mode: '0644'
+    line: '@cert-authority *.{{ global_domain }} {{ ssh_host_ca_public_key.content | b64decode | trim }}'
+    regexp: "^@cert-authority \\*\\.{{ global_domain | regex_escape() }}"
+
+- name: Display SSH setup completion
+  ansible.builtin.debug:
+    msg:
+      - 'SSH client configured for {{ ssh_user_default_user }}'
+      - ''
+      - 'Keys installed to: {{ ssh_user_ssh_dir }}'
+      - '  Private key: id_ed25519'
+      - '  Public key: id_ed25519.pub'
+      - '  Certificate: id_ed25519-cert.pub'
+      - '  User CA: {{ ssh_user_user_ca_key_name }}.pub'
+      - '  Host CA: {{ ssh_user_host_ca_key_name }}.pub'
+      - ''
+      - 'Host CA trusted in known_hosts for: *.{{ global_domain }}'

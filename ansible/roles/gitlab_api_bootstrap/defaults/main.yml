@@ -1,0 +1,33 @@
+---
+# Default variables for gitlab_api_bootstrap role
+# ====================================================================
+# API token lifecycle, application settings enforcement, and
+# GitLab resource provisioning (groups, projects, users) via the API.
+#
+# When called from gitlab_configure orchestrator, most variables cascade
+# from the parent role. When called standalone, these defaults apply.
+
+# ===============================================
+# API Connection
+# ===============================================
+# When orchestrated: inherited from gitlab_configure (which derives from inventory)
+# When standalone: provide via inventory or extra-vars
+gitlab_api_url: 'https://{{ ansible_host | default(ansible_default_ipv4.address) }}'
+gitlab_ssl_verify: false
+gitlab_api_token: '{{ vault_secrets.gitlab.api_token | default("") }}'
+
+# ===============================================
+# Credentials (for vault persistence)
+# ===============================================
+gitlab_root_password: '{{ vault_secrets.gitlab.root_password | default("") }}'
+gitlab_root_email: 'admin@{{ global_domain }}'
+gitlab_external_url: 'https://{{ inventory_hostname }}.{{ global_domain }}'
+
+# ===============================================
+# Application Settings (role-owned)
+# ===============================================
+# These defaults are enforced on every run via the Settings API.
+# gitlab.yml only applies on first initialization — the database wins after that.
+gitlab_signup_enabled: false
+gitlab_allow_local_requests_from_webhooks: true
+gitlab_allow_local_requests_from_system_hooks: true

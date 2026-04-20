@@ -1,0 +1,216 @@
+---
+# tasks file for terraform_generate_talos role
+# Generates Talos K8s Terraform files from inventory data and cluster configuration.
+#
+# Prerequisites:
+#   inventory_loader must have run first to populate:
+#     inventory_builder_talos_cp       — Talos controlplane nodes
+#     inventory_builder_talos_worker   — Talos worker nodes
+#
+# Output files (in inventory_builder_project_dir):
+#   - talos-vms.auto.tfvars       — Talos VM definitions
+#   - talos-providers.auto.tf     — Stub (no per-node providers needed)
+#   - talos-nodes.auto.tf         — Talos VM module (single dynamic block)
+#   - talos-outputs.auto.tf       — Terraform output definitions
+- name: Validate Talos cluster configuration exists
+  ansible.builtin.assert:
+    that:
+      - global_talos_cluster is defined
+      - inventory_builder_talos_cp is defined
+      - inventory_builder_talos_worker is defined
+    fail_msg: 'Required Talos inventory data is missing. Ensure inventory_loader is available before terraform_generate_talos.'
+    success_msg: 'Talos cluster configuration found'
+
+# -----------------------------------------------
+# Use pre-loaded Talos nodes from inventory_loader
+# -----------------------------------------------
+- name: Extract Talos nodes from unified host data
+  ansible.builtin.set_fact:
+    _talos_hostvar_cp_nodes: >-
+      {{ dict(inventory_builder_talos_cp | default({}) | dict2items
+         | map(attribute='key')
+         | zip(inventory_builder_talos_cp | default({}) | dict2items
+               | map(attribute='value.vm_config'))) }}
+    _talos_hostvar_worker_nodes: >-
+      {{ dict(inventory_builder_talos_worker | default({}) | dict2items
+         | map(attribute='key')
+         | zip(inventory_builder_talos_worker | default({}) | dict2items
+               | map(attribute='value.vm_config'))) }}
+  run_once: true
+
+- name: Display pre-loaded Talos nodes
+  ansible.builtin.debug:
+    msg:
+      - "Talos CP nodes from inventory: {{ (_talos_hostvar_cp_nodes.keys() | list | join(', ')) if (_talos_hostvar_cp_nodes | length > 0) else 'none' }}"
+      - "Talos worker nodes from inventory: {{ (_talos_hostvar_worker_nodes.keys() | list | join(', ')) if (_talos_hostvar_worker_nodes | length > 0) else 'none' }}"
+  run_once: true
+
+# -----------------------------------------------
+# Merge host_var nodes with cluster.yml defaults
+# -----------------------------------------------
+- name: Build default fields for Talos nodes
+  ansible.builtin.set_fact:
+    _cp_defaults:
+      target_node: '{{ global_talos_cluster.target_node }}'
+      cores: '{{ global_talos_cluster.controlplane.cores }}'
+      memory: '{{ global_talos_cluster.controlplane.memory }}'
+      disk_size: '{{ global_talos_cluster.controlplane.disk_size }}'
+      disk_storage: '{{ global_talos_cluster.disk_storage }}'
+      subnet_key: '{{ global_talos_cluster.subnet_key }}'
+      bridge: 'vmbr0'
+      iso_file: '{{ global_talos_cluster.iso_file }}'
+      role: 'controlplane'
+    _worker_defaults:
+      target_node: '{{ global_talos_cluster.target_node }}'
+      cores: '{{ global_talos_cluster.worker.cores }}'
+      memory: '{{ global_talos_cluster.worker.memory }}'
+      disk_size: '{{ global_talos_cluster.worker.disk_size }}'
+      disk_storage: '{{ global_talos_cluster.disk_storage }}'
+      subnet_key: '{{ global_talos_cluster.subnet_key }}'
+      bridge: 'vmbr0'
+      iso_file: '{{ global_talos_cluster.iso_file }}'
+      role: 'worker'
+  run_once: true
+
+- name: Merge host_var CP nodes with defaults
+  ansible.builtin.set_fact:
+    _talos_merged_cp_nodes: >-
+      {{ _talos_merged_cp_nodes | default({}) | combine({
+        item.key: _cp_defaults | combine(item.value, recursive=True) | combine({
+          '_source': 'host_var',
+          'ip_address': item.value.ip_address,
+          'mac_address': item.value.mac_address | default(''),
+        })
+      }) }}
+  loop: '{{ _talos_hostvar_cp_nodes | dict2items | sort(attribute="key") }}'
+  loop_control:
+    label: '{{ item.key }}'
+  run_once: true
+  when: _talos_hostvar_cp_nodes | length > 0
+
+- name: Merge host_var worker nodes with defaults
+  ansible.builtin.set_fact:
+    _talos_merged_worker_nodes: >-
+      {{ _talos_merged_worker_nodes | default({}) | combine({
+        item.key: _worker_defaults | combine(item.value, recursive=True) | combine({
+          '_source': 'host_var',
+          'ip_address': item.value.ip_address,
+          'mac_address': item.value.mac_address | default(''),
+        })
+      }) }}
+  loop: '{{ _talos_hostvar_worker_nodes | dict2items | sort(attribute="key") }}'
+  loop_control:
+    label: '{{ item.key }}'
+  run_once: true
+  when: _talos_hostvar_worker_nodes | length > 0
+
+# -----------------------------------------------
+# Auto-generate extra nodes if extra_count > 0
+# -----------------------------------------------
+- name: Auto-generate extra controlplane nodes
+  ansible.builtin.set_fact:
+    _talos_merged_cp_nodes: >-
+      {{ _talos_merged_cp_nodes | default({}) | combine({
+        ('cp-auto-%02d' | format(item + 1)): _cp_defaults | combine({
+          '_source': 'auto',
+          'ip_address': _auto_ip,
+          'mac_address': global_talos_cluster.controlplane.mac_prefix + ('%02x' | format(
+            (_talos_merged_cp_nodes | default({}) | length) + item + 1
+          )),
+          'description': 'Auto-generated Talos CP node %02d' | format(item + 1),
+        })
+      }) }}
+  vars:
+    _cp_start_parts: "{{ global_talos_cluster.controlplane.ip_start.split('.') }}"
+    _cp_base_offset: "{{ _talos_merged_cp_nodes | default({}) | dict2items | selectattr('value._source', 'equalto', 'host_var') | list | length }}"
+    _candidate_offset: '{{ _cp_base_offset | int + item }}'
+    _auto_ip: "{{ _cp_start_parts[:3] | join('.') }}.{{ _cp_start_parts[3] | int + _candidate_offset | int }}"
+  loop: '{{ range(0, global_talos_cluster.controlplane.extra_count | default(0) | int) | list }}'
+  when: global_talos_cluster.controlplane.extra_count | default(0) | int > 0
+  run_once: true
+
+- name: Auto-generate extra worker nodes
+  ansible.builtin.set_fact:
+    _talos_merged_worker_nodes: >-
+      {{ _talos_merged_worker_nodes | default({}) | combine({
+        ('worker-auto-%02d' | format(item + 1)): _worker_defaults | combine({
+          '_source': 'auto',
+          'ip_address': _auto_ip,
+          'mac_address': global_talos_cluster.worker.mac_prefix + ('%02x' | format(
+            (_talos_merged_worker_nodes | default({}) | length) + item + 1
+          )),
+          'description': 'Auto-generated Talos worker node %02d' | format(item + 1),
+        })
+      }) }}
+  vars:
+    _worker_start_parts: "{{ global_talos_cluster.worker.ip_start.split('.') }}"
+    _worker_base_offset: "{{ _talos_merged_worker_nodes | default({}) | dict2items | selectattr('value._source', 'equalto', 'host_var') | list | length }}"
+    _candidate_offset: '{{ _worker_base_offset | int + item }}'
+    _auto_ip: "{{ _worker_start_parts[:3] | join('.') }}.{{ _worker_start_parts[3] | int + _candidate_offset | int }}"
+  loop: '{{ range(0, global_talos_cluster.worker.extra_count | default(0) | int) | list }}'
+  when: global_talos_cluster.worker.extra_count | default(0) | int > 0
+  run_once: true
+
+- name: Ensure Talos node dicts exist
+  ansible.builtin.set_fact:
+    _talos_merged_cp_nodes: '{{ _talos_merged_cp_nodes | default({}) }}'
+    _talos_merged_worker_nodes: '{{ _talos_merged_worker_nodes | default({}) }}'
+  run_once: true
+
+- name: Compute total Talos node count
+  ansible.builtin.set_fact:
+    _talos_total_nodes: '{{ (_talos_merged_cp_nodes | length) + (_talos_merged_worker_nodes | length) }}'
+  run_once: true
+
+- name: Display Talos cluster summary
+  ansible.builtin.debug:
+    msg:
+      - 'Talos cluster: {{ global_talos_cluster.cluster_name | default(project_name) }}'
+      - 'CP nodes: {{ _talos_merged_cp_nodes | length }} ({{ _talos_merged_cp_nodes | dict2items | selectattr("value._source", "equalto", "host_var") | list | length }} host_var, {{ _talos_merged_cp_nodes | dict2items | selectattr("value._source", "equalto", "auto") | list | length }} auto)'
+      - 'Workers: {{ _talos_merged_worker_nodes | length }} ({{ _talos_merged_worker_nodes | dict2items | selectattr("value._source", "equalto", "host_var") | list | length }} host_var, {{ _talos_merged_worker_nodes | dict2items | selectattr("value._source", "equalto", "auto") | list | length }} auto)'
+  run_once: true
+
+# -----------------------------------------------
+# Generate Talos Terraform files
+# -----------------------------------------------
+- name: Generate Talos Terraform files
+  ansible.builtin.template:
+    src: '{{ item.src }}'
+    dest: '{{ inventory_builder_project_dir }}/{{ item.dest }}'
+    owner: '{{ inventory_builder_project_owner }}'
+    group: '{{ inventory_builder_project_group }}'
+    mode: '{{ item.mode | default("0644") }}'
+  loop:
+    - {
+        src: 'terraform/talos-vms.auto.tfvars.j2',
+        dest: 'talos-vms.auto.tfvars',
+      }
+    - {
+        src: 'terraform/talos-providers.auto.tf.j2',
+        dest: 'talos-providers.auto.tf',
+        mode: '0600',
+      }
+    - { src: 'terraform/talos-nodes.auto.tf.j2', dest: 'talos-nodes.auto.tf' }
+    - {
+        src: 'terraform/talos-outputs.auto.tf.j2',
+        dest: 'talos-outputs.auto.tf',
+      }
+  run_once: true
+  loop_control:
+    label: '{{ item.dest }}'
+  when: _talos_total_nodes | int > 0
+
+- name: Skip Talos Terraform generation when no Talos nodes exist
+  ansible.builtin.debug:
+    msg: 'Skipping Talos Terraform file generation: no Talos controlplane/worker nodes were found.'
+  when: _talos_total_nodes | int == 0
+  run_once: true
+
+- name: Display generated Talos files
+  ansible.builtin.debug:
+    msg:
+      - 'Talos Terraform files generated in: {{ inventory_builder_project_dir }}'
+      - 'Files: talos-vms.auto.tfvars, talos-nodes.auto.tf, talos-outputs.auto.tf'
+      - 'Note: Uses default Proxmox provider with target_node for VM placement'
+  run_once: true
+  when: _talos_total_nodes | int > 0

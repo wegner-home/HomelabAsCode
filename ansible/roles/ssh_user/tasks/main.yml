@@ -1,0 +1,82 @@
+---
+# Main tasks file for ssh_user role
+
+- name: Resolve file owner for localhost operations
+  ansible.builtin.set_fact:
+    _resolved_owner: '{{ ansible_env.SUDO_USER | default(ansible_user_id, true) }}'
+
+- name: Display SSH user management information
+  ansible.builtin.debug:
+    msg:
+      - 'Managing SSH keys and certificates'
+      - 'User CA: {{ ssh_user_user_ca_dir }}/{{ ssh_user_user_ca_key_name }}'
+      - 'Certificates: {{ ssh_user_cert_dir }}'
+
+- name: Verify SSH CA exists (should be created by bootstrap_localhost)
+  ansible.builtin.include_tasks: verify_ssh_ca.yml
+  run_once: true
+  tags:
+    - ssh_ca
+    - verify_ca
+
+- name: Manage SSH user keys and certificates for default user (admin)
+  ansible.builtin.include_tasks: manage_user.yml
+  vars:
+    ssh_user_item:
+      name: '{{ ssh_user_default_user }}'
+      principals:
+        - '{{ ssh_user_default_user }}'
+        - admin
+        - '{{ project_name }}'
+        - root
+  tags:
+    - ssh_keys
+    - ssh_certs
+    - admin_user
+
+- name: Manage SSH user keys and certificates for service user
+  ansible.builtin.include_tasks: manage_user.yml
+  vars:
+    ssh_user_item:
+      name: '{{ ssh_user_service_user }}'
+      principals:
+        - '{{ ssh_user_service_user }}'
+        - service
+        - automation
+  when: ssh_user_create_service_user_cert | bool
+  tags:
+    - ssh_keys
+    - ssh_certs
+    - service_user
+
+- name: Manage SSH user keys and certificates for additional users
+  ansible.builtin.include_tasks: manage_user.yml
+  loop: '{{ ssh_user_users }}'
+  loop_control:
+    label: '{{ ssh_user_item.name }}'
+    loop_var: ssh_user_item
+  when: ssh_user_users | length > 0
+  tags:
+    - ssh_keys
+    - ssh_certs
+
+- name: Setup SSH client configuration
+  ansible.builtin.include_tasks: client_config.yml
+  tags:
+    - ssh_config
+
+- name: Display SSH user certificate summary
+  ansible.builtin.debug:
+    msg:
+      - '=============================================='
+      - 'SSH User Certificates Created/Verified'
+      - '=============================================='
+      - 'Admin user: {{ ssh_user_default_user }}'
+      - '  Key: {{ ssh_user_cert_dir }}/{{ ssh_user_default_user }}/id_ed25519'
+      - '  Cert: {{ ssh_user_cert_dir }}/{{ ssh_user_default_user }}/id_ed25519-cert.pub'
+      - ''
+      - 'Service user: {{ ssh_user_service_user }}'
+      - '  Key: {{ ssh_user_cert_dir }}/{{ ssh_user_service_user }}/id_ed25519'
+      - '  Cert: {{ ssh_user_cert_dir }}/{{ ssh_user_service_user }}/id_ed25519-cert.pub'
+      - '=============================================='
+  when: ssh_user_create_service_user_cert | bool

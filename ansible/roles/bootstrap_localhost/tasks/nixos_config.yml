@@ -1,0 +1,81 @@
+---
+# NixOS configuration management tasks
+
+- name: Ensure directory exists
+  ansible.builtin.file:
+    path: '{{ ansible_env.HOME }}/iac/nixos'
+    state: directory
+    mode: '0755'
+    owner: '{{ ansible_user_id }}'
+
+- name: Check if users/{{ ansible_user_id }}/default.nix exists
+  ansible.builtin.stat:
+    path: '{{ ansible_env.HOME }}/iac/nixos/users/{{ ansible_user_id }}/default.nix'
+  register: user_config_stat
+
+- name: Read current user configuration
+  ansible.builtin.slurp:
+    src: '{{ ansible_env.HOME }}/iac/nixos/users/{{ ansible_user_id }}/default.nix'
+  register: user_config_content
+  when: user_config_stat.stat.exists
+
+- name: Check if passwordless sudo is already configured
+  ansible.builtin.set_fact:
+    sudo_already_configured: "{{ (user_config_content.content | b64decode) is search('security\\.sudo\\.extraRules') }}"
+  when: user_config_stat.stat.exists
+
+- name: Add passwordless sudo to user configuration
+  ansible.builtin.blockinfile:
+    path: '{{ ansible_env.HOME }}/iac/nixos/users/{{ ansible_user_id }}/default.nix'
+    marker: '  # {mark} ANSIBLE MANAGED - Passwordless sudo'
+    insertafter: 'users\.users\.{{ ansible_user_id }}\s*=\s*\{'
+    block: |2
+
+        # Passwordless sudo for management
+        security.sudo.extraRules = [
+          {
+            users = [ "{{ ansible_user_id }}" ];
+            commands = [
+              {
+                command = "ALL";
+                options = [ "NOPASSWD" ];
+              }
+            ];
+          }
+        ];
+  when:
+    - user_config_stat.stat.exists
+    - not (sudo_already_configured | default(false))
+  register: sudo_config_added
+
+- name: Display configuration change status
+  ansible.builtin.debug:
+    msg: "{{ 'Passwordless sudo configuration added to NixOS config' if sudo_config_added.changed else 'Passwordless sudo already configured or user config not found' }}"
+
+- name: Prompt to rebuild NixOS configuration
+  ansible.builtin.debug:
+    msg: |
+      ⚠️  NixOS configuration has been modified!
+
+      To apply changes, run:
+        cd ~/iac/nixos && sudo nixos-rebuild switch --flake .#{{ ansible_hostname }}
+
+      Or let the playbook continue and apply automatically.
+  when: sudo_config_added.changed | default(false)
+
+- name: Apply NixOS configuration (rebuild)
+  ansible.builtin.command:
+    cmd: nixos-rebuild switch --flake {{ ansible_env.HOME }}/iac/nixos#{{ ansible_hostname }}
+  become: true
+  when:
+    - sudo_config_added.changed | default(false)
+    - bootstrap_localhost_auto_rebuild | default(true)
+  register: nixos_rebuild
+  changed_when: "'building' in nixos_rebuild.stderr"
+
+- name: Display rebuild output
+  ansible.builtin.debug:
+    var: nixos_rebuild.stdout_lines
+  when:
+    - nixos_rebuild is defined
+    - nixos_rebuild.stdout_lines is defined

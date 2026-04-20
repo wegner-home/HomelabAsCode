@@ -1,0 +1,53 @@
+---
+# tasks file for sops_write role
+#
+# Persists runtime-generated secrets to a SOPS/age-encrypted YAML file.
+# Drop-in replacement for vault_nix.
+#
+# Required input:
+#   new_secrets (dict) — set as a fact by the caller before including this role
+#
+# Output:
+#   The SOPS file at sops_write_file is created/updated with the merged secrets.
+
+# ── Pre-flight checks ──────────────────────────────────────────────────
+
+- name: Validate that age keyfile exists on controller
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: '{{ sops_write_age_keyfile }}'
+  register: _sops_write_keyfile_stat
+
+- name: Fail if age keyfile is missing
+  ansible.builtin.assert:
+    that:
+      - _sops_write_keyfile_stat.stat.exists
+    fail_msg: >-
+      Age private key not found at '{{ sops_write_age_keyfile }}'.
+      Run stage_0 (sops_age role) first to generate the age keypair,
+      or set sops_write_age_keyfile to the correct path.
+    quiet: true
+
+- name: Display SOPS write operation
+  ansible.builtin.debug:
+    msg: 'Persisting secrets to SOPS file: {{ sops_write_file }}'
+  when: new_secrets is defined and new_secrets | length > 0
+
+# ── Read → Merge → Write pipeline ─────────────────────────────────────
+
+- name: Read existing SOPS secrets (or init empty)
+  ansible.builtin.include_tasks: read_existing.yml
+
+- name: Merge new secrets and encrypt to SOPS file
+  ansible.builtin.include_tasks: merge_and_write.yml
+  when: new_secrets is defined and new_secrets | length > 0
+
+# ── Cleanup internal facts ─────────────────────────────────────────────
+
+- name: Clear internal merge variables
+  ansible.builtin.set_fact:
+    _sops_write_existing: null
+    _sops_write_merged: null
+  no_log: true
+  when: new_secrets is defined and new_secrets | length > 0

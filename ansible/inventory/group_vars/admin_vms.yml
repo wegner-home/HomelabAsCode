@@ -1,0 +1,56 @@
+---
+# Group variables for admin VMs
+host_role: admin
+host_ssh_ca_enable: true
+host_ssh_ca_key_type: "ed25519"
+ssh_ca_user_cert_validity: "+52w"
+ssh_ca_host_cert_validity: "+104w"
+ssh_ca_dir: "/var/lib/{{ project_name }}/ssh_ca"
+host_sops_enable: true
+sops_age_remote_key_file: "/var/lib/sops-nix/key.txt"
+sops_secrets_file: "/etc/nixos/secrets/secrets.yaml"
+
+admin_management_packages:
+  - ansible
+  - terraform
+  - opentofu
+  - kubectl
+  - k9s
+  - talosctl
+  - helm
+  - kustomize
+  - age
+  - sops
+  - git
+  - curl
+  - wget
+  - jq
+  - yq
+  - netcat
+  - tcpdump
+  - dig
+  - nmap
+  - vim
+  - tmux
+  - htop
+  - tree
+admin_enable_docker: False
+docker_storage_driver: "overlay2"
+docker_log_driver: "json-file"
+docker_log_max_size: "10m"
+docker_log_max_file: "3"
+
+# Override: admin VMs add /var/lib/<env> to default backup paths
+restic_repository: '{{ global_backup_repository | default("sftp://backup@truenas.{{ global_domain }}:/mnt/pool/backup-{{ project_name }}") }}'
+restic_backup_paths:
+  - /etc/nixos
+  - /var/lib/{{ project_name }}
+  - /var/lib/sops-nix
+  - /home/ansible/.config
+  - /home/*/Documents
+  - /home/*/.ssh
+
+admin_firewall_allowed_tcp_ports:
+  - 22
+  - 9100
+gitlab_runner_enable: false

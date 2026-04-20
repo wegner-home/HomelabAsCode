@@ -1,0 +1,119 @@
+---
+# Host vars for vm-template
+
+# ===============================================
+# VM Infrastructure Definition (for Terraform)
+# ===============================================
+global_nixos_vm_definitions:
+  vm-template:
+    target_node: "pve04"
+    clone_template: "nixos-cloud-init-tmpl"
+    cores: 2
+    memory: 4096
+
+    nixos_template: "generic"
+    nixos_profile: "server"
+
+    nixos_modules:
+      - monitoring
+      - backup
+
+    ip_address: "10.0.20.100"
+    mac_address: "BC:24:11:00:01:01"
+    cidr: 8
+    subnet_key: "main"
+    bridge: "vmbr0"
+
+    hostname: "vm-template"
+    dns_hostnames:
+      - "example-vm-01"
+      - "example"
+      - "app"
+
+    ciuser: "ansible"
+    cipassword_from_vault: true
+    boot_disk_type: "virtio"
+    description: "Example VM for demonstration"
+
+    tags:
+      - example
+      - staging
+
+    onboot: True
+    dns_enabled: True
+    dhcp_enabled: True
+host_role: service
+
+# ===============================================
+# NixOS Flakes Configuration
+# ===============================================
+nixos_flake_deploy_from_repo: true
+
+host_flakes:
+  - name: "vm-template"
+    deploy_from_repo: true
+    description: "Service VM NixOS configuration from GitLab repo"
+
+# ===============================================
+# Backup Configuration
+# ===============================================
+restic_backup_enable: true
+restic_backup_schedule: "daily"
+restic_backup_paths:
+  - /etc/nixos
+  - "/var/lib/{{ project_name }}"
+  - /var/lib/sops-nix
+  - /home/ansible/.config
+  - /home/*/Documents
+  - /home/*/.ssh
+restic_exclude_patterns:
+  - "*.log"
+  - "*.tmp"
+  - "**/cache"
+  - "**/Cache"
+  - "**/.cache"
+  - "**/tmp"
+  - "**/node_modules"
+  - "**/__pycache__"
+
+restic_retention:
+  keep_last: 3
+  keep_daily: 7
+  keep_weekly: 4
+  keep_monthly: 6
+  keep_yearly: 2
+
+# ===============================================
+# Monitoring Configuration
+# ===============================================
+node_exporter_enable: true
+node_exporter_port: 9100
+node_exporter_listen_address: "0.0.0.0"
+node_exporter_collectors:
+  - systemd
+  - filesystem
+  - netdev
+  - meminfo
+  - diskstats
+  - cpu
+  - loadavg
+
+# ===============================================
+# GitLab Runner
+# ===============================================
+gitlab_runner_enable: false
+
+# ===============================================
+# Firewall Configuration
+# ===============================================
+nixos_firewall_allowed_tcp_ports:
+  - 22
+  - 9100
+
+# ===============================================
+# System Configuration
+# ===============================================
+system_locale: "en_US.UTF-8"
+system_keymap: "de"
+enable_debug_logging: False
+test_mode: False

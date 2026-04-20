@@ -1,0 +1,134 @@
+---
+# Render a single template file
+# Handles path expansion for _host_ and _env_ patterns
+#
+# Input variables:
+#   _template_src: absolute path to template file
+#   _template_rel: relative path from templates/ directory
+#
+# Context passed to templates:
+#   blueprint_repo_context: dict with all_hosts, env, plus manifest context vars
+#   blueprint_host_context: dict with host_name, host_config, repo_context (for _host_ templates)
+#   blueprint_env: environment name
+
+# -----------------------------------------------
+# Determine if this is a host-expansion template
+# -----------------------------------------------
+- name: 'Template — Check for expansion patterns in {{ _template_rel }}'
+  ansible.builtin.set_fact:
+    _is_host_template: '{{ blueprint_expansion_patterns.host in _template_rel }}'
+    _is_env_template: '{{ blueprint_expansion_patterns.env in _template_rel }}'
+
+# -----------------------------------------------
+# Build repo-level context (available to all templates)
+# -----------------------------------------------
+- name: 'Template — Build repo context'
+  ansible.builtin.set_fact:
+    _repo_context: >-
+      {{ blueprint_template_vars | combine({
+           'all_hosts': blueprint_hosts,
+           'env': blueprint_env
+         }) }}
+
+# -----------------------------------------------
+# Ensure destination directory exists (for _env_ patterns)
+# -----------------------------------------------
+- name: 'Template — Ensure destination directory exists'
+  ansible.builtin.file:
+    path: '{{ blueprint_output }}/{{ _dest_dir }}'
+    state: directory
+    owner: '{{ blueprint_owner }}'
+    group: '{{ blueprint_group }}'
+    mode: '{{ blueprint_dir_mode }}'
+  vars:
+    _dest_dir: >-
+      {{ (_template_rel | regex_replace('\.j2$', '') | replace(blueprint_expansion_patterns.env, blueprint_env)) | dirname }}
+  delegate_to: localhost
+  when: _dest_dir | length > 0
+
+# -----------------------------------------------
+# Simple template (no _host_ expansion)
+# -----------------------------------------------
+- name: 'Template — Render {{ _template_rel }}'
+  ansible.builtin.template:
+    src: '{{ _template_src }}'
+    dest: '{{ blueprint_output }}/{{ _dest_path }}'
+    owner: '{{ blueprint_owner }}'
+    group: '{{ blueprint_group }}'
+    mode: '{{ blueprint_file_mode }}'
+  vars:
+    _dest_path: >-
+      {{ _template_rel | regex_replace('\.j2$', '') | replace(blueprint_expansion_patterns.env, blueprint_env) }}
+    # Standard context for all templates
+    blueprint_repo_context: '{{ _repo_context }}'
+    blueprint_source_dir: '{{ blueprint_source }}'
+    blueprint_output_dir: '{{ blueprint_output }}'
+    # Legacy vars for backward compatibility
+    env_name: '{{ blueprint_env }}'
+    all_hosts: '{{ blueprint_hosts }}'
+    template_vars: '{{ blueprint_template_vars }}'
+  delegate_to: localhost
+  when:
+    - not _is_host_template
+
+# -----------------------------------------------
+# Per-host template expansion (_host_ pattern)
+# -----------------------------------------------
+- name: 'Template — Ensure per-host directory exists for {{ _template_rel }}'
+  ansible.builtin.file:
+    path: '{{ blueprint_output }}/{{ _dest_dir }}'
+    state: directory
+    owner: '{{ blueprint_owner }}'
+    group: '{{ blueprint_group }}'
+    mode: '{{ blueprint_dir_mode }}'
+  vars:
+    _dest_dir: >-
+      {{ (_template_rel | regex_replace('\.j2$', '')
+         | replace(blueprint_expansion_patterns.host, _host_item.key)
+         | replace(blueprint_expansion_patterns.env, blueprint_env)) | dirname }}
+  loop: '{{ blueprint_hosts | dict2items }}'
+  loop_control:
+    loop_var: _host_item
+    label: '{{ _host_item.key }}'
+  delegate_to: localhost
+  when:
+    - _is_host_template
+    - (_template_rel | regex_replace('\.j2$', '') | dirname) != ''
+
+- name: 'Template — Render {{ _template_rel }} for each host'
+  ansible.builtin.template:
+    src: '{{ _template_src }}'
+    dest: '{{ blueprint_output }}/{{ _dest_path }}'
+    owner: '{{ blueprint_owner }}'
+    group: '{{ blueprint_group }}'
+    mode: '{{ blueprint_file_mode }}'
+  vars:
+    _dest_path: >-
+      {{ _template_rel
+         | regex_replace('\.j2$', '')
+         | replace(blueprint_expansion_patterns.host, _host_item.key)
+         | replace(blueprint_expansion_patterns.env, blueprint_env) }}
+    # Per-host context
+    blueprint_host_context:
+      host_name: '{{ _host_item.key }}'
+      host_config: '{{ _host_item.value }}'
+      repo_context: '{{ _repo_context }}'
+    blueprint_repo_context: '{{ _repo_context }}'
+    blueprint_source_dir: '{{ blueprint_source }}'
+    blueprint_output_dir: '{{ blueprint_output }}'
+    # Legacy vars for backward compatibility
+    host_name: '{{ _host_item.key }}'
+    host_config: '{{ _host_item.value }}'
+    vm_name: '{{ _host_item.key }}'
+    vm_config: '{{ _host_item.value }}'
+    env_name: '{{ blueprint_env }}'
+    all_hosts: '{{ blueprint_hosts }}'
+    template_vars: '{{ blueprint_template_vars }}'
+  loop: '{{ blueprint_hosts | dict2items }}'
+  loop_control:
+    loop_var: _host_item
+    label: '{{ _host_item.key }} → {{ _template_rel | replace(blueprint_expansion_patterns.host, _host_item.key) | regex_replace("\.j2$", "") }}'
+  delegate_to: localhost
+  when:
+    - _is_host_template
+    - blueprint_hosts | length > 0

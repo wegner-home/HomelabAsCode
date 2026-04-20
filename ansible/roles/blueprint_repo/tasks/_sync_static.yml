@@ -1,0 +1,24 @@
+---
+# Sync static files from blueprint to output
+# Uses rsync with --ignore-existing by default (configurable)
+
+- name: "Static sync [{{ blueprint_name }}] — Build rsync arguments"
+  ansible.builtin.set_fact:
+    _rsync_excludes: '{{ _blueprint_manifest.static.exclude | default([".git", "*.j2", "*.bak"]) }}'
+    _rsync_ignore_existing: "{{ (_blueprint_manifest.static.sync_mode | default(blueprint_static_sync_mode)) == 'ignore-existing' }}"
+
+- name: "Static sync [{{ blueprint_name }}] — Sync static files"
+  ansible.builtin.command:
+    argv: >-
+      {{ ['rsync', '-a']
+         + (['--ignore-existing'] if _rsync_ignore_existing | bool else [])
+         + (_rsync_excludes | map('regex_replace', '^(.*)$', '--exclude=\\1') | list)
+         + [blueprint_source ~ '/static/', blueprint_output ~ '/'] }}
+  register: _blueprint_static_sync
+  changed_when: _blueprint_static_sync.rc == 0
+  delegate_to: localhost
+
+- name: "Static sync [{{ blueprint_name }}] — Display sync result"
+  ansible.builtin.debug:
+    msg: "Static files synced from {{ blueprint_source }}/static/ to {{ blueprint_output }}/"
+  when: blueprint_debug | bool

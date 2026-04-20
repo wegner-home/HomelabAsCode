@@ -1,0 +1,31 @@
+{# Template: .gitignore.j2 for NixOS flakes repository #}
+# Build results
+result
+result-*
+
+# Hardware configurations (host-specific)
+hosts/*/hardware-configuration.nix
+
+# Secrets (encrypted files are OK, but not keys)
+**/.age-key.txt
+**/key.txt
+secrets/*.key
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Terraform state (if any)
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# Ansible retry files
+*.retry

@@ -1,0 +1,34 @@
+---
+# Convert Proxmox VM to template
+
+- name: Check if VM is already a template
+  ansible.builtin.shell: |
+    qm config {{ proxmox_template_vm_id }} | grep -q "^template: 1"
+  register: is_template
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Convert VM to template
+  ansible.builtin.command: qm template {{ proxmox_template_vm_id }}
+  when: is_template.rc != 0
+  register: template_convert
+  changed_when: true
+  become: true
+
+- name: Verify template conversion
+  ansible.builtin.command: qm config {{ proxmox_template_vm_id }}
+  register: template_config
+  changed_when: false
+  become: true
+
+- name: Display template information
+  ansible.builtin.debug:
+    msg:
+      - 'Template created successfully!'
+      - 'Node: {{ proxmox_template_node }}'
+      - 'Template ID: {{ proxmox_template_vm_id }}'
+      - 'Template name: {{ proxmox_template_name }}'
+      - ''
+      - 'Clone with: qm clone {{ proxmox_template_vm_id }} <new-vm-id> --name <new-vm-name>'
+      - 'Or use Terraform proxmox_vm_qemu resource with clone = "{{ proxmox_template_name }}"'

@@ -1,0 +1,426 @@
+---
+# Deploy a single flake from the host_flakes list
+# Called once per flake in the list
+
+# Normalize the flake config (handle both string and dict format)
+- name: Parse flake configuration
+  ansible.builtin.set_fact:
+    flake_name: "{{ current_flake.name if current_flake is mapping else current_flake }}"
+    flake_repo: "{{ current_flake.repo | default(nixos_flake_repo) if current_flake is mapping else nixos_flake_repo }}"
+    flake_deploy_from_repo: "{{ current_flake.deploy_from_repo | default(nixos_flake_deploy_from_repo) if current_flake is mapping else nixos_flake_deploy_from_repo }}"
+    flake_deploy_dir: "{{ current_flake.deploy_dir | default(nixos_flake_deploy_dir) if current_flake is mapping else nixos_flake_deploy_dir }}"
+    flake_rebuild_args: "{{ current_flake.rebuild_args | default(nixos_flake_rebuild_args) if current_flake is mapping else nixos_flake_rebuild_args }}"
+    flake_force_rebuild: "{{ current_flake.force_rebuild | default(nixos_flake_force_rebuild) if current_flake is mapping else nixos_flake_force_rebuild }}"
+    flake_use_repo_copy: "{{ current_flake.use_repo_copy | default(nixos_flake_use_repo_copy) if current_flake is mapping else nixos_flake_use_repo_copy }}"
+
+- name: Display flake being deployed
+  ansible.builtin.debug:
+    msg:
+      - "Deploying flake: {{ flake_name }}"
+      - 'Repository: {{ flake_repo if flake_deploy_from_repo else "local files" }}'
+      - "Deploy from repo: {{ flake_deploy_from_repo }}"
+      - "Use repo copy: {{ flake_use_repo_copy }}"
+
+# ===============================================
+# Remote Flake Deployment
+# ===============================================
+- name: Deploy flake from remote repository
+  when: flake_deploy_from_repo | bool
+  block:
+    - name: Debug flake authentication variables
+      ansible.builtin.debug:
+        msg:
+          - "flake_repo: {{ flake_repo }}"
+          - "global_domain: {{ global_domain | default('UNKNOWN') }}"
+          - "vault_secrets.gitlab.api_token defined: {{ vault_secrets.gitlab.api_token is defined }}"
+          - "Token length: {{ (vault_secrets.gitlab.api_token | length) if vault_secrets.gitlab.api_token is defined else 'N/A' }}"
+          - "Matches domain: {{ flake_repo is search(global_domain) }}"
+
+    - name: Construct flake URI with authentication
+      ansible.builtin.set_fact:
+        # Inject token if it's our internal GitLab
+        # We use oauth2 as username for GitLab tokens
+        flake_repo_with_auth: >-
+          {% if vault_secrets.gitlab.api_token is defined and vault_secrets.gitlab.api_token | length > 0 and (flake_repo is search(global_domain) or flake_repo is search('gitlab')) %}
+            {% if flake_repo.startswith('git+https://') %}
+              {{ 'git+https://oauth2:' + vault_secrets.gitlab.api_token + '@' + flake_repo[12:] }}
+            {% elif flake_repo.startswith('https://') %}
+              {{ 'https://oauth2:' + vault_secrets.gitlab.api_token + '@' + flake_repo[8:] }}
+            {% else %}
+              {{ flake_repo }}
+            {% endif %}
+          {% else %}
+            {{ flake_repo | trim }}
+          {% endif %}
+      no_log: true
+
+    - name: Construct flake URI
+      ansible.builtin.set_fact:
+        flake_uri: "{{ flake_repo_with_auth | trim }}#{{ flake_name | trim }}"
+      no_log: true
+
+    - name: Debug constructed URI (masked)
+      ansible.builtin.debug:
+        msg: "Constructed URI: {{ flake_uri | regex_replace('oauth2:([^@]+)@', 'oauth2:********@') }}"
+
+    - name: Validate remote flake (dry-run with timeout)
+      ansible.builtin.command: >
+        timeout 30 nix flake show "{{ flake_repo_with_auth | trim }}"
+      environment:
+        GIT_SSL_NO_VERIFY: "true"
+      register: flake_show_result
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+      become: false
+      when: nixos_flake_validate_before_apply | bool
+
+    - name: Check flake validation result
+      ansible.builtin.debug:
+        msg: |
+          {% if flake_show_result.rc | default(1) == 0 %}
+          Flake repository is accessible: {{ flake_repo }}
+          {% elif flake_show_result.rc | default(1) == 124 %}
+          WARNING: Flake validation timed out (30s). Remote repo may be slow or unavailable.
+          Continuing anyway - rebuild will fail if repo is truly inaccessible.
+          {% else %}
+          WARNING: Cannot validate flake repository: {{ flake_repo }}
+          Error: {{ flake_show_result.stderr | default('Unknown error') }}
+          Continuing anyway - rebuild will fail if repo is truly inaccessible.
+          {% endif %}
+      when:
+        - nixos_flake_validate_before_apply | bool
+        - flake_show_result is defined
+
+    - name: Get current system generation (before)
+      ansible.builtin.raw: readlink /run/current-system | grep -oP '\d+$'
+      register: current_generation
+      changed_when: false
+      failed_when: false
+
+    - name: Apply NixOS configuration from remote flake
+      ansible.builtin.command:
+        cmd: >
+          nixos-rebuild {{ nixos_flake_rebuild_command }}
+          --flake {{ flake_uri }}
+          --no-write-lock-file
+          --refresh
+          --target-host {{ nixos_flake_target_ssh_user }}@{{ ansible_host }}
+          --sudo
+          {{ flake_rebuild_args }}
+      environment:
+        GIT_SSL_NO_VERIFY: "true"
+        NIX_SSHOPTS: "{{ nixos_flake_target_ssh_opts }}{% if nixos_flake_target_ssh_key %} -i {{ nixos_flake_target_ssh_key }}{% endif %}"
+      register: nixos_rebuild_result
+      changed_when: nixos_rebuild_result.rc == 0
+      # rc=255 often means SSH dropped because sshd was restarted during
+      # switch-to-configuration.  If the output shows activation progressed
+      # (units being restarted/started), the deploy likely succeeded — let
+      # the post-rebuild generation check confirm.
+      failed_when: >-
+        nixos_rebuild_result.rc != 0
+        and not (
+          nixos_rebuild_result.rc == 255
+          and 'activating the configuration' in (nixos_rebuild_result.stderr | default(''))
+        )
+      delegate_to: localhost
+      become: false
+      timeout: "{{ nixos_flake_rebuild_timeout }}"
+      when: nixos_flake_use_target_host | bool
+
+    - name: Warn about SSH disconnect during activation
+      ansible.builtin.debug:
+        msg: >-
+          nixos-rebuild exited with rc=255 (SSH likely dropped when sshd restarted).
+          Activation output shows success — verifying via generation check.
+      when:
+        - nixos_flake_use_target_host | bool
+        - nixos_rebuild_result.rc | default(0) == 255
+        - "'activating the configuration' in (nixos_rebuild_result.stderr | default(''))"
+
+    - name: Run on-target rebuild (remote fallback)
+      ansible.builtin.include_tasks: _nixos_rebuild_on_target.yml
+      vars:
+        _rebuild_on_target_cmd: >-
+          nixos-rebuild {{ nixos_flake_rebuild_command }}
+          --flake {{ flake_uri }}
+          --no-write-lock-file
+          --refresh
+          {{ flake_rebuild_args }}
+      when: not (nixos_flake_use_target_host | bool)
+
+    - name: Wait for target to come back after rebuild
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        delay: 5
+        timeout: 120
+      delegate_to: localhost
+      become: false
+      when: nixos_flake_use_target_host | bool
+
+    - name: Get new system generation (after)
+      ansible.builtin.raw: readlink /run/current-system | grep -oP '\d+$'
+      register: new_generation
+      changed_when: false
+      failed_when: false
+
+    - name: Store generation info
+      ansible.builtin.set_fact:
+        nixos_generation: "{{ new_generation }}"
+
+    - name: Verify generation advanced after SSH-disconnect rebuild
+      ansible.builtin.fail:
+        msg: >-
+          nixos-rebuild exited with rc=255 and the system generation did NOT
+          advance (before={{ current_generation.stdout | default('?') }},
+          after={{ new_generation.stdout | default('?') }}).
+          The deployment likely failed despite SSH disconnect.
+      when:
+        - nixos_rebuild_result.rc | default(0) == 255
+        - current_generation.stdout | default('') | trim == new_generation.stdout | default('') | trim
+        - current_generation.stdout | default('') | trim != ''
+
+    - name: Display rebuild result
+      ansible.builtin.debug:
+        msg:
+          - "Flake {{ flake_name }} deployed successfully"
+          - 'Previous generation: {{ current_generation.stdout | default("unknown") }}'
+          - 'New generation: {{ new_generation.stdout | default("unknown") }}'
+
+# ===============================================
+# Local Deployment (Full Repo Copy or Templates)
+# ===============================================
+- name: Deploy flake from local files
+  when: not flake_deploy_from_repo | bool
+  block:
+    - name: Ensure deployment directory exists
+      ansible.builtin.raw: mkdir -p '{{ flake_deploy_dir }}' && chown root:root '{{ flake_deploy_dir }}' && chmod 0755 '{{ flake_deploy_dir }}'
+      become: true
+      changed_when: false
+
+    - name: Backup existing configuration
+      ansible.builtin.raw: >
+        tar czf {{ flake_deploy_dir }}/nixos-config-backup-$(date +%s).tar.gz
+        -C {{ flake_deploy_dir }}
+        --exclude='*.tar.gz'
+        . 2>/dev/null || true
+      when: nixos_flake_backup_config | bool
+      register: config_backup
+      failed_when: false
+      changed_when: false
+      become: true
+
+    # =============================================
+    # Mode 1: Full Repository Copy (for GitLab bootstrap)
+    # =============================================
+    - name: Deploy full flake repository
+      when: flake_use_repo_copy | bool
+      block:
+        - name: Check if local flake repo exists
+          ansible.builtin.stat:
+            path: "{{ nixos_flake_local_repo_path }}/flake.nix"
+          delegate_to: localhost
+          register: local_flake_repo_check
+
+        - name: Fail if local flake repo not found
+          ansible.builtin.fail:
+            msg: |
+              Local flake repository not found at: {{ nixos_flake_local_repo_path }}
+              Expected: {{ nixos_flake_local_repo_path }}/flake.nix
+
+              Initialize the flake repo first by running:
+                cd {{ nixos_flake_local_repo_path }} && ./init.sh
+
+              Or set nixos_flake_use_repo_copy: false to use templates
+          when: not local_flake_repo_check.stat.exists
+
+        - name: Synchronize flake repository to remote host
+          ansible.builtin.raw: >
+            rsync -a --itemize-changes --recursive
+            --exclude='.git'
+            --exclude='*.tar.gz'
+            --exclude='result'
+            --exclude='secrets/*.yaml'
+            --exclude='secrets/*.yml'
+            --chmod=D0755,F0644
+            --rsync-path="sudo rsync"
+            -e 'ssh {{ nixos_flake_target_ssh_opts }}{% if nixos_flake_target_ssh_key %} -i {{ nixos_flake_target_ssh_key }}{% endif %}'
+            '{{ nixos_flake_local_repo_path }}/'
+            '{{ nixos_flake_target_ssh_user }}@{{ ansible_host }}:{{ flake_deploy_dir }}/'
+          delegate_to: localhost
+          become: false
+          register: flake_repo_synced
+          # --itemize-changes outputs lines starting with > or < when files change
+          changed_when: flake_repo_synced.stdout_lines | select('match', '^[><c]') | list | length > 0
+
+        - name: Display repo sync result
+          ansible.builtin.debug:
+            msg: "Flake repository synced from {{ nixos_flake_local_repo_path }} to {{ flake_deploy_dir }}"
+          when: flake_repo_synced.changed
+
+    # =============================================
+    # Mode 2: Template Deployment (simple configs)
+    # =============================================
+    - name: Deploy from Jinja2 templates
+      when: not flake_use_repo_copy | bool
+      block:
+        - name: Check for flake.nix template
+          ansible.builtin.stat:
+            path: "{{ role_path }}/templates/flake.nix.j2"
+          delegate_to: localhost
+          register: flake_template_check
+
+        - name: Check for configuration.nix template
+          ansible.builtin.stat:
+            path: "{{ role_path }}/templates/configuration.nix.j2"
+          delegate_to: localhost
+          register: config_template_check
+
+        - name: Warn if no templates found
+          ansible.builtin.debug:
+            msg: |
+              WARNING: No flake templates found in role.
+              Expected: {{ role_path }}/templates/flake.nix.j2
+              You must provide these templates or set deploy_from_repo: true
+          when: not flake_template_check.stat.exists
+
+        - name: Render flake.nix template locally
+          ansible.builtin.template:
+            src: flake.nix.j2
+            dest: "/tmp/.ansible_rendered_flake.nix"
+            mode: "0644"
+          delegate_to: localhost
+          register: flake_config_deployed
+          when: flake_template_check.stat.exists
+
+        - name: Push flake.nix to remote host
+          ansible.builtin.raw: >
+            rsync -a --chmod=F0644 --rsync-path='sudo rsync'
+            -e 'ssh {{ nixos_flake_target_ssh_opts }}{% if nixos_flake_target_ssh_key %} -i {{ nixos_flake_target_ssh_key }}{% endif %}'
+            /tmp/.ansible_rendered_flake.nix
+            '{{ nixos_flake_target_ssh_user | default("ansible") }}@{{ ansible_host }}:{{ flake_deploy_dir }}/flake.nix'
+          delegate_to: localhost
+          become: false
+          when: flake_config_deployed is changed
+
+        - name: Render configuration.nix template locally
+          ansible.builtin.template:
+            src: configuration.nix.j2
+            dest: "/tmp/.ansible_rendered_configuration.nix"
+            mode: "0644"
+          delegate_to: localhost
+          register: nixos_config_deployed
+          when: config_template_check.stat.exists
+
+        - name: Push configuration.nix to remote host
+          ansible.builtin.raw: >
+            rsync -a --chmod=F0644 --rsync-path='sudo rsync'
+            -e 'ssh {{ nixos_flake_target_ssh_opts }}{% if nixos_flake_target_ssh_key %} -i {{ nixos_flake_target_ssh_key }}{% endif %}'
+            /tmp/.ansible_rendered_configuration.nix
+            '{{ nixos_flake_target_ssh_user | default("ansible") }}@{{ ansible_host }}:{{ flake_deploy_dir }}/configuration.nix'
+          delegate_to: localhost
+          become: false
+          when: nixos_config_deployed is changed
+
+    # =============================================
+    # Apply Configuration (both modes)
+    # =============================================
+    - name: Get current system generation (before)
+      ansible.builtin.raw: readlink /run/current-system | grep -oP '\d+$'
+      register: current_generation
+      changed_when: false
+      failed_when: false
+
+    # Check if rebuild is needed by evaluating if config differs from running system.
+    # Skip when using --target-host: the build happens on localhost anyway,
+    # and running `nix build` on the target wastes RAM (OOM risk on small VMs).
+    - name: Check if NixOS rebuild is needed
+      ansible.builtin.raw: |
+        # Compare current system with the new flake evaluation
+        CURRENT=$(readlink /run/current-system)
+        NEW=$(nix build --no-link --print-out-paths '{{ flake_deploy_dir }}#nixosConfigurations.{{ flake_name }}.config.system.build.toplevel' 2>/dev/null || echo "BUILD_NEEDED")
+        if [ "$NEW" = "BUILD_NEEDED" ] || [ "$CURRENT" != "$NEW" ]; then
+          echo "REBUILD_NEEDED"
+        else
+          echo "NO_CHANGE"
+        fi
+      register: rebuild_check
+      changed_when: false
+      failed_when: false
+      become: true
+      when:
+        - flake_use_repo_copy | bool
+        - not (nixos_flake_use_target_host | bool)
+
+    - name: Set rebuild required flag
+      ansible.builtin.set_fact:
+        _rebuild_required: >-
+          {{
+            flake_force_rebuild | bool or
+            (rebuild_check.stdout | default('') is search('REBUILD_NEEDED')) or
+            (flake_repo_synced is defined and flake_repo_synced.changed) or
+            (nixos_config_deployed is defined and nixos_config_deployed.changed) or
+            (flake_config_deployed is defined and flake_config_deployed.changed)
+          }}
+      failed_when: false
+
+    - name: Apply NixOS configuration from local flake
+      ansible.builtin.command:
+        cmd: >
+          nixos-rebuild {{ nixos_flake_rebuild_command }}
+          --flake {{ nixos_flake_local_repo_path }}#{{ flake_name }}
+          --target-host {{ nixos_flake_target_ssh_user }}@{{ ansible_host }}
+          --sudo
+          {{ flake_rebuild_args }}
+      environment:
+        NIX_SSHOPTS: "{{ nixos_flake_target_ssh_opts }}{% if nixos_flake_target_ssh_key %} -i {{ nixos_flake_target_ssh_key }}{% endif %}"
+      when:
+        - nixos_flake_use_target_host | bool
+        - _rebuild_required | default(false) | bool
+      register: nixos_rebuild_result
+      changed_when: nixos_rebuild_result.rc == 0
+      failed_when: nixos_rebuild_result.rc != 0
+      delegate_to: localhost
+      become: false
+      timeout: "{{ nixos_flake_rebuild_timeout }}"
+
+    - name: Run on-target rebuild (local fallback)
+      ansible.builtin.include_tasks: _nixos_rebuild_on_target.yml
+      vars:
+        _rebuild_on_target_cmd: >-
+          nixos-rebuild {{ nixos_flake_rebuild_command }}
+          --flake {{ flake_deploy_dir }}#{{ flake_name }}
+          {{ flake_rebuild_args }}
+      when:
+        - not (nixos_flake_use_target_host | bool)
+        - _rebuild_required | default(false) | bool
+
+    - name: Wait for target to come back after local rebuild
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        delay: 5
+        timeout: 120
+      delegate_to: localhost
+      become: false
+      when:
+        - nixos_flake_use_target_host | bool
+        - nixos_rebuild_result is not skipped
+
+    - name: Get new system generation (after)
+      ansible.builtin.raw: readlink /run/current-system | grep -oP '\d+$'
+      register: new_generation
+      changed_when: false
+      failed_when: false
+
+    - name: Store generation info
+      ansible.builtin.set_fact:
+        nixos_generation: "{{ new_generation }}"
+
+    - name: Display local deployment result
+      ansible.builtin.debug:
+        msg:
+          - 'Flake {{ flake_name }} deployed from {{ "full repo copy" if flake_use_repo_copy else "templates" }}'
+          - 'Previous generation: {{ current_generation.stdout | default("unknown") }}'
+          - 'New generation: {{ new_generation.stdout | default("unknown") }}'

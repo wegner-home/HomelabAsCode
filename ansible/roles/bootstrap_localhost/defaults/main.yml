@@ -1,0 +1,61 @@
+---
+# defaults file for bootstrap_localhost role
+
+# Directory settings
+bootstrap_localhost_config_dir: "/var/local/iac"
+bootstrap_localhost_sops_dir: "/var/local/iac/sops/age"
+bootstrap_localhost_ssh_user_dir: "{{ ansible_env.HOME }}/.ssh"
+bootstrap_localhost_terraform_dir: "{{ global_iac_terraform_dir }}generated"
+bootstrap_localhost_terraform_state_dir: "{{ global_iac_terraform_dir }}state"
+
+# Service user and group
+bootstrap_localhost_service_user: "{{ global_service_user | default('ansible') }}"
+bootstrap_localhost_admin_group: "{{ global_admin_group | default('iac-admin') }}"
+
+# ===============================================
+# SSH Directory Structure (derived from global_ssh_*)
+# ===============================================
+bootstrap_localhost_ssh_base_dir: "{{ global_ssh_base_dir }}"
+
+# User CA
+bootstrap_localhost_ssh_user_ca_dir: "{{ global_ssh_user_ca_dir }}"
+bootstrap_localhost_ssh_user_ca_key_name: "{{ global_ssh_user_ca_key_name }}"
+bootstrap_localhost_ssh_user_ca_comment: "iac User SSH CA"
+bootstrap_localhost_ssh_user_cert_validity: "{{ global_ssh_user_cert_validity }}"
+
+# Host CA
+bootstrap_localhost_ssh_host_ca_dir: "{{ global_ssh_host_ca_dir }}"
+bootstrap_localhost_ssh_host_ca_key_name: "{{ global_ssh_host_ca_key_name }}"
+bootstrap_localhost_ssh_host_ca_comment: "iac Host SSH CA"
+bootstrap_localhost_ssh_host_cert_validity: "{{ global_ssh_host_cert_validity }}"
+
+# Certificate directories
+bootstrap_localhost_ssh_user_certs_dir: "{{ global_ssh_user_cert_dir }}"
+bootstrap_localhost_ssh_host_certs_dir: "{{ global_ssh_host_cert_dir }}"
+
+# Common directories to create
+bootstrap_localhost_common_dirs:
+  - "{{ bootstrap_localhost_config_dir }}"
+  - "{{ bootstrap_localhost_sops_dir }}"
+  - "{{ bootstrap_localhost_ssh_user_dir }}"
+  - "{{ bootstrap_localhost_terraform_dir }}"
+  - "{{ bootstrap_localhost_terraform_state_dir }}"
+  - "{{ bootstrap_localhost_ssh_base_dir }}"
+  - "{{ bootstrap_localhost_ssh_user_ca_dir }}"
+  - "{{ bootstrap_localhost_ssh_host_ca_dir }}"
+  - "{{ bootstrap_localhost_ssh_user_certs_dir }}"
+  - "{{ bootstrap_localhost_ssh_host_certs_dir }}"
+
+# NixOS specific settings
+bootstrap_localhost_flake_dir: "/var/local/iac/nix-flakes"
+bootstrap_localhost_ensure_packages:
+  - git
+  - age
+  - sops
+  - terraform
+  - kubectl
+  - talosctl
+
+# NixOS configuration management
+bootstrap_localhost_flake_path: "{{ ansible_env.HOME }}/iac/nixos"
+bootstrap_localhost_auto_rebuild: true # Automatically rebuild NixOS after config changes

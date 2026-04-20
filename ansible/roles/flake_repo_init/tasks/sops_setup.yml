@@ -1,0 +1,95 @@
+---
+# Setup SOPS/age encryption for NixOS flake
+
+- name: Create age key directory
+  ansible.builtin.file:
+    path: '{{ nix_flake_repo_age_key_dir }}'
+    state: directory
+    mode: '0700'
+
+- name: Check if age key already exists
+  ansible.builtin.stat:
+    path: '{{ nix_flake_repo_age_key_file }}'
+  register: age_key_stat
+
+- name: Generate age key if it doesn't exist
+  ansible.builtin.command:
+    cmd: age-keygen -o "{{ nix_flake_repo_age_key_file }}"
+  when: not age_key_stat.stat.exists
+  register: age_keygen_result
+  changed_when: true
+
+- name: Set age key file permissions
+  ansible.builtin.file:
+    path: '{{ nix_flake_repo_age_key_file }}'
+    mode: '0600'
+
+- name: Get age public key
+  ansible.builtin.command:
+    cmd: age-keygen -y "{{ nix_flake_repo_age_key_file }}"
+  register: age_pubkey_result
+  changed_when: false
+
+- name: Set age public key fact
+  ansible.builtin.set_fact:
+    age_public_key: '{{ age_pubkey_result.stdout }}'
+
+- name: Display age public key
+  ansible.builtin.debug:
+    msg:
+      - '✓ Age encryption key ready'
+      - '  Private key: {{ nix_flake_repo_age_key_file }}'
+      - '  Public key: {{ age_public_key }}'
+
+- name: Check if .sops.yaml needs updating
+  ansible.builtin.command:
+    cmd: grep -q "age1abc\.\.\." "{{ nix_flake_repo_path }}/.sops.yaml"
+  register: sops_yaml_check
+  changed_when: false
+  failed_when: false
+
+- name: Backup .sops.yaml
+  ansible.builtin.copy:
+    src: '{{ nix_flake_repo_path }}/.sops.yaml'
+    dest: '{{ nix_flake_repo_path }}/.sops.yaml.bak'
+    remote_src: true
+    mode: '0644'
+  when: sops_yaml_check.rc == 0
+
+- name: Update .sops.yaml with real age public key (placeholder pattern 1)
+  ansible.builtin.replace:
+    path: '{{ nix_flake_repo_path }}/.sops.yaml'
+    regexp: 'age1abc\.\.\., age1def\.\.\., age1ghi\.\.\.'
+    replace: '{{ age_public_key }}'
+  when: sops_yaml_check.rc == 0
+
+- name: Update .sops.yaml with real age public key (placeholder pattern 2)
+  ansible.builtin.replace:
+    path: '{{ nix_flake_repo_path }}/.sops.yaml'
+    regexp: 'age1abc\.\.\.'
+    replace: '{{ age_public_key }}'
+  when: sops_yaml_check.rc == 0
+
+- name: Update .sops.yaml with real age public key (placeholder pattern 3)
+  ansible.builtin.replace:
+    path: '{{ nix_flake_repo_path }}/.sops.yaml'
+    regexp: 'age1def\.\.\.'
+    replace: '{{ age_public_key }}'
+  when: sops_yaml_check.rc == 0
+
+- name: Update .sops.yaml with real age public key (placeholder pattern 4)
+  ansible.builtin.replace:
+    path: '{{ nix_flake_repo_path }}/.sops.yaml'
+    regexp: 'age1ghi\.\.\.'
+    replace: '{{ age_public_key }}'
+  when: sops_yaml_check.rc == 0
+
+- name: Display SOPS configuration results
+  ansible.builtin.debug:
+    msg:
+      - '✓ SOPS configuration updated'
+      - '  .sops.yaml: {{ nix_flake_repo_path }}/.sops.yaml'
+      - "  Backup: {{ '.sops.yaml.bak created' if sops_yaml_check.rc == 0 else 'not needed' }}"
+      - ''
+      - 'IMPORTANT: Edit secrets file with:'
+      - '  sops {{ nix_flake_repo_path }}/secrets/secrets.yaml'

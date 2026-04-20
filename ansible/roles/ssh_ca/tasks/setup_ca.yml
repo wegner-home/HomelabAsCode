@@ -1,0 +1,109 @@
+---
+# SSH Certificate Authority setup for NixOS hosts
+# This enables SSH certificate-based authentication
+
+- name: Ensure SSH CA directory exists
+  ansible.builtin.file:
+    path: '{{ ssh_ca_dir }}'
+    state: directory
+    mode: '0700'
+    owner: root
+    group: root
+  become: true
+
+- name: Check if SSH CA key exists
+  ansible.builtin.stat:
+    path: '{{ ssh_ca_dir }}/{{ ssh_ca_key_name }}'
+  register: ssh_ca_key_stat
+
+- name: Generate SSH CA key pair
+  ansible.builtin.command: >
+    ssh-keygen -t {{ ssh_ca_key_type }}
+    -f {{ ssh_ca_dir }}/{{ ssh_ca_key_name }}
+    -C "{{ project_name }} SSH CA - {{ ssh_ca_fqdn }}"
+    -N ""
+  when: not ssh_ca_key_stat.stat.exists
+  register: ssh_ca_generated
+  become: true
+  notify: backup_ssh_ca
+
+- name: Set proper permissions on CA private key
+  ansible.builtin.file:
+    path: '{{ ssh_ca_dir }}/{{ ssh_ca_key_name }}'
+    mode: '0600'
+    owner: root
+    group: root
+  become: true
+
+- name: Set proper permissions on CA public key
+  ansible.builtin.file:
+    path: '{{ ssh_ca_dir }}/{{ ssh_ca_key_name }}.pub'
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+
+- name: Fetch SSH CA public key
+  ansible.builtin.slurp:
+    src: '{{ ssh_ca_dir }}/{{ ssh_ca_key_name }}.pub'
+  register: ssh_ca_public_key_content
+  become: true
+
+- name: Display SSH CA public key
+  ansible.builtin.debug:
+    msg:
+      - 'SSH CA public key generated/found:'
+      - '{{ ssh_ca_public_key_content.content | b64decode }}'
+      - ''
+      - 'Save this key to distribute to hosts for trust configuration'
+
+- name: Create SSH CA info file
+  ansible.builtin.copy:
+    content: |
+      # {{ project_name }} SSH Certificate Authority
+      # Generated: {{ ansible_date_time.iso8601 }}
+      # FQDN: {{ ssh_ca_fqdn }}
+
+      ## CA Public Key
+      {{ ssh_ca_public_key_content.content | b64decode }}
+
+      ## Usage
+      # On client hosts, add to /etc/ssh/sshd_config:
+      #   TrustedUserCAKeys /etc/ssh/ca-keys/{{ ssh_ca_key_name }}.pub
+
+      # On user machines, add to ~/.ssh/known_hosts:
+      #   @cert-authority *.{{ ssh_ca_domain }} {{ ssh_ca_public_key_content.content | b64decode }}
+    dest: '{{ ssh_ca_dir }}/CA_README.txt'
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+
+- name: Create SSH certificate signing script (user)
+  ansible.builtin.template:
+    src: sign-user-cert.sh.j2
+    dest: '{{ ssh_ca_dir }}/sign-user-cert.sh'
+    mode: '0750'
+    owner: root
+    group: root
+  become: true
+
+- name: Create SSH certificate signing script (host)
+  ansible.builtin.template:
+    src: sign-host-cert.sh.j2
+    dest: '{{ ssh_ca_dir }}/sign-host-cert.sh'
+    mode: '0750'
+    owner: root
+    group: root
+  become: true
+
+- name: Display SSH CA setup completion
+  ansible.builtin.debug:
+    msg:
+      - '========================================='
+      - 'SSH CA Setup Complete'
+      - '========================================='
+      - 'CA Key: {{ ssh_ca_dir }}/{{ ssh_ca_key_name }}'
+      - 'User Signing Script: {{ ssh_ca_dir }}/sign-user-cert.sh'
+      - 'Host Signing Script: {{ ssh_ca_dir }}/sign-host-cert.sh'
+      - '========================================='

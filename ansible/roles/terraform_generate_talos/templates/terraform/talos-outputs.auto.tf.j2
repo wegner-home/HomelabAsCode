@@ -1,0 +1,23 @@
+# Auto-generated Talos VM outputs
+# Generated on: {{ ansible_date_time.iso8601 }}
+# Source: ansible/roles/tf_build_inv_nix
+#
+# DO NOT EDIT MANUALLY - Changes will be overwritten
+
+output "talos_vms" {
+  description = "All Talos VMs"
+  value = {
+    for name, vm in module.talos_vm : name => {
+      vm_id             = vm.vm_id
+      vm_name           = vm.vm_name
+      ip_address        = vm.ip_address
+      actual_ip_address = vm.actual_ip_address
+      mac_address       = vm.mac_address
+    }
+  }
+}
+
+output "talos_iso_filename" {
+  description = "Filename of the downloaded Talos ISO"
+  value       = var.talos_cluster.enabled ? local.talos_iso_filename : null
+}

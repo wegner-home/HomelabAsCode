@@ -1,0 +1,11 @@
+---
+- name: Generate a new host key if it doesn't exist
+  community.crypto.openssh_keypair:
+    path: '{{ bootstrap_ssh_cert_host_key_path }}'
+    type: ed25519
+  register: bootstrap_ssh_cert_host_public_key
+  delegate_to: '{{ bootstrap_ssh_cert_ca_server }}'
+  become: true
+  vars:
+    bootstrap_ssh_cert_host_public_key:
+      content: '{{ bootstrap_ssh_cert_host_public_key.public_key | b64encode }}'

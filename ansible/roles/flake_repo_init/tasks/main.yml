@@ -1,0 +1,25 @@
+---
+# Main tasks for flake_repo_init role
+# Initializes the NixOS flake repository with git, SOPS, and secrets
+
+- name: Include prerequisites check
+  ansible.builtin.include_tasks: prerequisites.yml
+  tags: ['prerequisites']
+
+- name: Include git initialization
+  ansible.builtin.include_tasks: git_init.yml
+  when: nix_flake_repo_git_init | bool
+  tags: ['git']
+
+- name: Include SOPS setup
+  ansible.builtin.include_tasks: sops_setup.yml
+  tags: ['sops', 'secrets']
+
+- name: Include flake validation
+  ansible.builtin.include_tasks: validate.yml
+  when: nix_flake_repo_validate | bool
+  tags: ['validate']
+
+- name: Display completion message
+  ansible.builtin.include_tasks: completion.yml
+  tags: ['always']

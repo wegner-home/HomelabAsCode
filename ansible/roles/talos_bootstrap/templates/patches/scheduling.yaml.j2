@@ -1,0 +1,5 @@
+# Scheduling patch — applied to CONTROL PLANE nodes only
+# Allows workloads to be scheduled on control plane nodes.
+# Required for single-node clusters; optional for multi-node.
+cluster:
+  allowSchedulingOnControlPlanes: true

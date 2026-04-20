@@ -1,0 +1,58 @@
+---
+# Defaults for nixos_image_build role
+# ====================================================================
+# Builds NixOS cloud images using nixos-generators on localhost.
+# Produces `proxmox_template_local_image_path` fact consumed by
+# the parent proxmox_template role's transfer_image step.
+
+# ==============================================
+# Build Directory & Configuration
+# ==============================================
+
+# proxmox_template_nixos_build_dir — inherited from parent role
+# (proxmox_template/defaults/main.yml). Not redefined here to avoid
+# dual-source confusion. Parent also uses it in cleanup.yml and
+# transfer_image.yml.
+
+# Configuration.nix template
+proxmox_template_nixos_config_file: 'configuration.nix.j2'
+proxmox_template_nixos_custom_config: ''
+
+# Grub boot device
+proxmox_template_nixos_grub_device: '/dev/vda'
+
+# nixpkgs channel
+proxmox_template_nixos_nixpkgs: 'nixos-{{ proxmox_template_nixos_version | default("25.11") }}'
+
+# Generator extra options
+proxmox_template_nixos_generator_extra_args: ''
+
+# proxmox_template_force_rebuild — inherited from parent role
+# (proxmox_template/defaults/main.yml). Controls both parent tasks
+# (transfer, create_vm) and child tasks (build). Single source of truth.
+
+# ==============================================
+# NixOS Image Tuning
+# ==============================================
+
+# Swap file size (safety net for initial nixos-rebuild before flake config applies)
+proxmox_template_nixos_swap_size: 2048
+
+# Nix build resource limits (prevent OOM during initial rebuild)
+proxmox_template_nixos_nix_cores: 1
+proxmox_template_nixos_nix_max_jobs: 1
+
+# Kernel modules for NixOS (virtio-scsi boot)
+proxmox_template_nixos_kernel_modules:
+  - virtio_net
+  - virtio_pci
+  - virtio_mmio
+  - virtio_blk
+  - virtio_scsi
+  - virtio_balloon
+  - virtio_console
+  - virtio_rng
+  - sd_mod
+  - ahci
+  - 9p
+  - 9pnet_virtio

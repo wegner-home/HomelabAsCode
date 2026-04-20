@@ -1,0 +1,86 @@
+{#
+Template: flake.nix.j2
+Purpose: Generate main flake.nix with all NixOS VM configurations
+Blueprint: nix-flakes
+Context: blueprint_repo_context (contains all_hosts, env, etc.)
+#}
+{
+  description = "NixOS configurations — generated from Ansible inventory";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-{{ blueprint_repo_context.nixos_version | default('25.11') }}";
+
+    # SOPS for secrets management
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { self, nixpkgs, sops-nix, ... }@inputs:
+    let
+      system = "x86_64-linux";
+
+      # Helper function to create NixOS configurations
+      mkHost = hostname: modules: nixpkgs.lib.nixosSystem {
+        inherit system;
+        specialArgs = { inherit inputs hostname; };
+        modules = [
+          # Global configuration
+          { networking.hostName = hostname; }
+
+          # Common profile applied to all hosts
+          ./profiles/common.nix
+
+          # SOPS-nix for secrets
+          sops-nix.nixosModules.sops
+
+          # Host-specific configuration
+          ./hosts/${hostname}/configuration.nix
+        ] ++ modules;
+      };
+
+    in
+    {
+      # NixOS configurations for each host
+      # Generated from: ansible/inventory/{{ blueprint_repo_context.env }}/host_vars/*.yml
+      nixosConfigurations = {
+{% for vm_name, vm_config in blueprint_repo_context.all_hosts.items() %}
+        # {{ vm_config.description | default(vm_name + ' - NixOS VM') }}
+        # Template: {{ vm_config.nixos_template | default('standard') }}
+        "{{ vm_name }}" = mkHost "{{ vm_name }}" [
+          ./profiles/{{ vm_config.nixos_profile | default('server') }}.nix
+          ./modules/base.nix
+{% if vm_config.nixos_modules is defined %}
+{% for module in vm_config.nixos_modules %}
+          ./modules/{{ module }}.nix
+{% endfor %}
+{% else %}
+          ./modules/monitoring.nix
+          ./modules/backup.nix
+{% endif %}
+        ];
+
+{% endfor %}
+      };
+
+      # Development shell
+      devShells.${system}.default = nixpkgs.legacyPackages.${system}.mkShell {
+        buildInputs = with nixpkgs.legacyPackages.${system}; [
+          nixpkgs-fmt
+          nil # Nix language server
+          sops
+          age
+          git
+        ];
+
+        shellHook = ''
+          echo "NixOS Flake Development Environment"
+          echo "Available commands:"
+          echo "  nix flake check                          - Validate all configurations"
+          echo "  nix flake show                           - Show all outputs"
+          echo "  nixos-rebuild switch --flake .#<hostname> - Deploy to host"
+        '';
+      };
+    };
+}

@@ -1,0 +1,2 @@
+# Placeholder for base application definitions
+# Add your app manifests here and reference them from clusters/<env>/apps.yaml

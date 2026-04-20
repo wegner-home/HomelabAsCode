@@ -1,0 +1,37 @@
+# Auto-generated Talos VM module — single dynamic block for all Proxmox nodes
+# Generated on: {{ ansible_date_time.iso8601 }}
+# Source: ansible/roles/tf_build_inv_nix
+#
+# DO NOT EDIT MANUALLY - Changes will be overwritten
+# Uses the default Proxmox provider with target_node for VM placement,
+# same pattern as module "nixos_vm" in main.tf.
+
+module "talos_vm" {
+  for_each = var.talos_cluster.enabled ? local.talos_all_nodes : {}
+
+  source = "./modules/talos_vm"
+
+  name         = each.key
+  target_node  = each.value.target_node
+  cores        = each.value.cores
+  memory       = each.value.memory
+  ip_address   = each.value.ip_address
+  mac_address  = each.value.mac_address
+  bridge       = each.value.bridge
+  iso_file     = local._resolved_iso != null ? local._resolved_iso : each.value.iso_file
+  disk_storage = each.value.disk_storage
+  disk_size    = each.value.disk_size
+
+  # Static IP kernel parameter configuration
+  ip_gateway             = var.talos_cluster.ip_gateway
+  ip_cidr                = var.talos_cluster.cidr
+  ip_dns                 = var.talos_cluster.ip_dns
+  hostname               = each.key
+  static_ip_kernel_param = {{ global_talos_cluster.static_ip_kernel_param | default(true) | lower }}
+
+  depends_on = [
+    null_resource.talos_iso_upload,
+    module.talos_dhcp_reservations,
+    module.talos_dns_reservations,
+  ]
+}

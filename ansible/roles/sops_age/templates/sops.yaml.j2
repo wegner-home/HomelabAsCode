@@ -1,0 +1,28 @@
+---
+# SOPS configuration template for NixOS
+
+# Creation rules for different file types
+creation_rules:
+  # NixOS secrets (using age encryption)
+  - path_regex: \.nix\.yaml$
+    age: {{ sops_age_public_key }}
+
+  # Kubernetes secrets
+  - path_regex: k8s/.*\.yaml$
+    age: {{ sops_age_public_key }}
+
+  # Terraform secrets
+  - path_regex: terraform/secrets/.*\.yaml$
+    age: {{ sops_age_public_key }}
+
+  # Default for all other YAML files
+  - path_regex: \.yaml$
+    age: {{ sops_age_public_key }}
+
+  # JSON files
+  - path_regex: \.json$
+    age: {{ sops_age_public_key }}
+
+  # Environment files
+  - path_regex: \.env$
+    age: {{ sops_age_public_key }}

@@ -1,0 +1,81 @@
+---
+# User and Group Management
+- name: Ensure iac groups exist
+  ansible.builtin.group:
+    name: '{{ item }}'
+    state: present
+  loop: '{{ global_groups }}'
+  become: true
+
+- name: Ensure iac users exist
+  ansible.builtin.user:
+    name: '{{ item.name }}'
+    groups: '{{ item.groups | default(omit) }}'
+    shell: "{{ item.shell | default('/bin/bash') }}"
+    state: "{{ item.state | default('present') }}"
+    create_home: '{{ item.create_home | default(true) }}'
+    system: '{{ item.system | default(false) }}'
+  loop: '{{ global_users }}'
+  when: item.name != 'root'
+  become: true
+
+# Sudoers Configuration
+- name: Allow admin group passwordless sudo
+  community.general.sudoers:
+    name: iac-admin-nopasswd
+    state: present
+    user: '%{{ global_admin_group }}'
+    runas: ALL
+    nopassword: true
+    commands: ALL
+  become: true
+
+# Password Management
+- name: Generate random passwords for users
+  block:
+    - name: Initialize user_passwords dict
+      ansible.builtin.set_fact:
+        user_passwords: {}
+
+    - name: Generate and assign structured passwords for users
+      ansible.builtin.set_fact:
+        user_passwords: >-
+          {{ user_passwords | default({}) | combine({
+            (item | string): {
+              'password': lookup('password', '/dev/null length=20 chars=ascii_letters,digits')
+            }
+          }, recursive=True) }}
+      loop: "{{ global_users | map(attribute='name') | list }}"
+
+    - name: Apply passwords for users
+      ansible.builtin.user:
+        name: '{{ item.key }}'
+        password: "{{ item.value.password | password_hash('sha512') }}"
+      loop: '{{ user_passwords | dict2items }}'
+      when: item.key != 'root'
+      become: true
+
+    - name: Save passwords to secrets vault variable
+      ansible.builtin.set_fact:
+        new_secrets: '{{ user_passwords }}'
+
+# Fix directory ownership after users are created
+- name: Fix ownership of admin folder
+  ansible.builtin.file:
+    path: '{{ bootstrap_proxmox_folder }}'
+    state: directory
+    owner: '{{ bootstrap_proxmox_service_user }}'
+    group: '{{ bootstrap_proxmox_group }}'
+    recurse: yes
+  become: true
+
+- name: Fix ownership of common directories
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: '{{ bootstrap_proxmox_service_user }}'
+    group: '{{ bootstrap_proxmox_group }}'
+    recurse: yes
+  loop: '{{ bootstrap_proxmox_common_dirs }}'
+  become: true
+  when: bootstrap_proxmox_common_dirs is defined and bootstrap_proxmox_common_dirs | length > 0

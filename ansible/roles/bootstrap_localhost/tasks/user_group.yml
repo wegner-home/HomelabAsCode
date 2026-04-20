@@ -1,0 +1,50 @@
+---
+# User and group management tasks for NixOS
+
+- name: Check if user is in admin group
+  ansible.builtin.command: id -nG {{ ansible_user_id }}
+  register: user_groups
+  changed_when: false
+  check_mode: false
+
+- name: Display current user groups
+  ansible.builtin.debug:
+    msg: 'Current user {{ ansible_user_id }} is in groups: {{ user_groups.stdout }}'
+
+- name: Ensure admin group exists
+  become: true
+  ansible.builtin.group:
+    name: '{{ bootstrap_localhost_admin_group }}'
+    state: present
+
+- name: Add current user to admin group
+  become: true
+  ansible.builtin.user:
+    name: '{{ ansible_user_id }}'
+    groups: '{{ bootstrap_localhost_admin_group }}'
+    append: true
+  register: user_modified
+
+- name: Re-gather facts to refresh group membership
+  ansible.builtin.setup:
+  when: user_modified.changed
+
+- name: Configure passwordless sudo for admin group
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/sudoers.d/90-iac-admin-nopasswd
+    line: '%{{ bootstrap_localhost_admin_group }} ALL=(ALL) NOPASSWD: ALL'
+    create: true
+    mode: '0440'
+    validate: /run/current-system/sw/bin/visudo -csf %s
+
+- name: Ensure service user exists
+  become: true
+  ansible.builtin.user:
+    name: '{{ bootstrap_localhost_service_user }}'
+    groups: '{{ bootstrap_localhost_admin_group }}'
+    shell: /bin/bash
+    state: present
+    create_home: true
+    system: false
+  when: bootstrap_localhost_service_user != ansible_user_id

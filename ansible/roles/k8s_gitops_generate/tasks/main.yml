@@ -1,0 +1,81 @@
+---
+# tasks file for k8s_gitops_generate role
+# Generates a FluxCD GitOps repository via the blueprint_repo role.
+#
+# Uses _env_ expansion (not _host_ expansion) to render cluster manifests
+# for the target environment (dev, dev-test, etc.).
+#
+# Template variables come from:
+#   - global_talos_cluster (inventory)
+#   - global_sops_age_public_key (from sops_age role or vault)
+#   - inventory_builder_env (environment name)
+#
+# Prerequisites:
+#   global_talos_cluster must be defined in inventory
+
+- name: 'K8s GitOps — Generate repository'
+  when: inventory_builder_generate_k8s_repo | default(false) | bool
+  block:
+    - name: Display K8s GitOps repo generation info
+      ansible.builtin.debug:
+        msg:
+          - '================================================'
+          - 'K8s GitOps Repository Generation via blueprint_repo'
+          - '================================================'
+          - 'Blueprint source: {{ inventory_builder_k8s_blueprint_dir }}'
+          - 'Output:           {{ inventory_builder_k8s_repo_output_dir }}'
+          - 'Environment:      {{ inventory_builder_env }}'
+          - 'Cluster:          {{ global_talos_cluster.cluster_name | default(project_name) }}'
+          - 'FluxCD repo:      {{ global_talos_cluster.fluxcd.git_repo | default("(not set)") }}'
+          - 'MetalLB pool:     {{ global_talos_cluster.metallb.address_pool | default("10.90.1.0/24") }}'
+          - 'kube-vip:         {{ global_talos_cluster.vip.enabled | default(false) | ternary(global_talos_cluster.vip.ip | default(""), "disabled") }}'
+          - '================================================'
+      run_once: true
+
+    - name: Render k8s blueprint
+      ansible.builtin.include_role:
+        name: blueprint_repo
+      vars:
+        blueprint_name: 'k8s'
+        blueprint_source: '{{ inventory_builder_k8s_blueprint_dir }}'
+        blueprint_output: '{{ inventory_builder_k8s_repo_output_dir }}'
+        blueprint_env: '{{ inventory_builder_env }}'
+        blueprint_hosts: {} # k8s uses _env_ expansion, not _host_
+        blueprint_owner: '{{ inventory_builder_project_owner }}'
+        blueprint_group: '{{ inventory_builder_project_group }}'
+        blueprint_template_vars:
+          cluster_name: '{{ global_talos_cluster.cluster_name | default(project_name) }}'
+          fluxcd_git_repo: '{{ global_talos_cluster.fluxcd.git_repo | default("") }}'
+          fluxcd_git_branch: '{{ global_talos_cluster.fluxcd.git_branch | default("main") }}'
+          metallb_address_pool: '{{ global_talos_cluster.metallb.address_pool | default("10.90.1.0/24") }}'
+          kube_vip_enabled: '{{ global_talos_cluster.vip.enabled | default(false) }}'
+          kube_vip_address: '{{ global_talos_cluster.vip.ip | default("") }}'
+          kube_vip_interface: '{{ global_talos_cluster.vip.interface | default("eth0") }}'
+          sops_age_public_key: '{{ global_sops_age_public_key | default("") }}'
+        blueprint_git_init: true
+        blueprint_git_commit: true
+        blueprint_debug: false
+
+    - name: Display K8s GitOps repo generation summary
+      ansible.builtin.debug:
+        msg:
+          - '================================================'
+          - 'K8s GitOps Repository Generated Successfully'
+          - '================================================'
+          - 'Output directory: {{ inventory_builder_k8s_repo_output_dir }}'
+          - 'Environment:      {{ inventory_builder_env }}'
+          - 'Cluster path:     clusters/{{ inventory_builder_env }}/'
+          - ''
+          - 'Infrastructure controllers:'
+          - '  - Cilium (CNI)'
+          - '  - MetalLB (LoadBalancer: {{ global_talos_cluster.metallb.address_pool | default("10.90.1.0/24") }})'
+          - '  - kube-vip ({{ global_talos_cluster.vip.enabled | default(false) | ternary("enabled: " + (global_talos_cluster.vip.ip | default("")), "disabled") }})'
+          - '  - cert-manager'
+          - '  - Traefik (Ingress)'
+          - '  - SOPS secrets operator'
+          - ''
+          - 'Next steps:'
+          - '  1. Push to GitLab (stage_4 handles this)'
+          - '  2. Bootstrap FluxCD: flux bootstrap git --url=<repo> --path=clusters/{{ inventory_builder_env }}'
+          - '================================================'
+      run_once: true

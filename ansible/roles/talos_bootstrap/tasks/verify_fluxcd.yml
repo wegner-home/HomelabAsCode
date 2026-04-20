@@ -1,0 +1,93 @@
+---
+# Phase 6: FluxCD verification
+# Verifies controllers, git sources, kustomizations.
+
+# ===============================================
+# Verify FluxCD Controllers
+# ===============================================
+- name: Check flux-system namespace exists
+  ansible.builtin.command: kubectl get namespace flux-system -o json
+  environment: "{{ _kubeconfig_env }}"
+  register: _flux_ns
+  changed_when: false
+  failed_when: false
+  retries: 6
+  delay: 10
+  until: _flux_ns.rc == 0
+
+- name: Fail if flux-system namespace does not exist
+  ansible.builtin.fail:
+    msg: >
+      flux-system namespace not found. FluxCD may not be installed.
+      Ensure your FluxCD manifests are in the git repo at '{{ talos_fluxcd_git_path }}'.
+  when: _flux_ns.rc != 0
+
+- name: Get FluxCD controller pods
+  ansible.builtin.command: kubectl get pods -n flux-system -o json
+  environment: "{{ _kubeconfig_env }}"
+  register: _flux_pods
+  changed_when: false
+
+- name: Parse FluxCD pod statuses
+  ansible.builtin.set_fact:
+    _flux_pod_list: "{{ (_flux_pods.stdout | from_json)['items'] }}"
+
+- name: Verify FluxCD controllers are running
+  ansible.builtin.assert:
+    that:
+      - _flux_pod_list | selectattr('status.phase', 'eq', 'Running') | list | length > 0
+    fail_msg: "No FluxCD controllers are running in flux-system namespace"
+    quiet: true
+
+- name: Display FluxCD controller status
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.metadata.name }}: {{ item.status.phase }}
+  loop: "{{ _flux_pod_list }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+# ===============================================
+# Verify Git Source
+# ===============================================
+- name: Check FluxCD git sources
+  ansible.builtin.command: flux get sources git -n flux-system -o json
+  environment: "{{ _kubeconfig_env }}"
+  register: _flux_sources
+  changed_when: false
+  failed_when: false
+
+- name: Display git source status
+  ansible.builtin.debug:
+    msg: "{{ _flux_sources.stdout_lines | default(['No git sources found']) }}"
+
+# ===============================================
+# Verify Kustomizations
+# ===============================================
+- name: Check FluxCD kustomizations
+  ansible.builtin.command: flux get kustomizations -A -o json
+  environment: "{{ _kubeconfig_env }}"
+  register: _flux_kustomizations
+  changed_when: false
+  failed_when: false
+
+- name: Display kustomization status
+  ansible.builtin.debug:
+    msg: "{{ _flux_kustomizations.stdout_lines | default(['No kustomizations found']) }}"
+
+# ===============================================
+# Optional: Force Reconciliation
+# ===============================================
+- name: Trigger FluxCD reconciliation
+  ansible.builtin.command: flux reconcile source git flux-system -n flux-system
+  environment: "{{ _kubeconfig_env }}"
+  register: _flux_reconcile
+  changed_when: true
+  failed_when: false
+
+- name: Display reconciliation result
+  ansible.builtin.debug:
+    msg:
+      - "--- FluxCD Verification ---"
+      - 'Controllers: {{ _flux_pod_list | selectattr("status.phase", "eq", "Running") | list | length }} running'
+      - 'Reconciliation: {{ "triggered" if _flux_reconcile.rc == 0 else "skipped (source not found)" }}'

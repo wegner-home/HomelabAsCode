@@ -1,0 +1,38 @@
+# Auto-generated effective subnet definitions from Ansible inventory
+# Generated on: {{ (ansible_facts | default({})).get('date_time', {}).get('iso8601', 'unknown') }}
+# Source: ansible/roles/tf_build_inv_nix
+#
+# DO NOT EDIT MANUALLY - Changes will be overwritten
+# Modify inventory group_vars and regenerate using: make nix-stage-2
+
+all_subnets = {
+{% set _subnets = opnsense_kea_subnets | default({}, true) %}
+{% if _subnets | length > 0 %}
+{% for subnet_key, subnet_config in _subnets.items() %}
+  "{{ subnet_key }}" = {
+    subnet      = "{{ subnet_config.subnet }}"
+    description = "{{ subnet_config.description | default('') }}"
+{% if subnet_config.pools is defined and subnet_config.pools | length > 0 %}
+    pools = [
+{% for pool in subnet_config.pools %}
+      "{{ pool }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+    ]
+{% else %}
+    pools = []
+{% endif %}
+{% if subnet_config.gateway is defined %}
+    gateway     = "{{ subnet_config.gateway }}"
+{% endif %}
+{% if subnet_config.dns_servers is defined and subnet_config.dns_servers | length > 0 %}
+    dns_servers = [
+{% for dns in subnet_config.dns_servers %}
+      "{{ dns }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+    ]
+{% endif %}
+  }{{ "," if not loop.last else "" }}
+
+{% endfor %}
+{% endif %}
+}

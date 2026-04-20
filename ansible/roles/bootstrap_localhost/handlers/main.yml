@@ -1,0 +1,13 @@
+---
+# Handlers for bootstrap_localhost role
+
+- name: Reload systemd
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart sshd
+  become: true
+  ansible.builtin.systemd:
+    name: sshd
+    state: restarted

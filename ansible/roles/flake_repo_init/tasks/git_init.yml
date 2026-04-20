@@ -1,0 +1,66 @@
+---
+# Initialize git repository for NixOS flake
+
+- name: Check if flake repository path exists
+  ansible.builtin.stat:
+    path: '{{ nix_flake_repo_path }}'
+  register: flake_repo_stat
+
+- name: Fail if flake repository doesn't exist
+  ansible.builtin.fail:
+    msg: 'Flake repository not found at {{ nix_flake_repo_path }}'
+  when: not flake_repo_stat.stat.exists
+
+- name: Check if git repository is already initialized
+  ansible.builtin.stat:
+    path: '{{ nix_flake_repo_path }}/.git'
+  register: git_repo_stat
+
+- name: Initialize git repository
+  ansible.builtin.command:
+    cmd: git init
+    chdir: '{{ nix_flake_repo_path }}'
+  when: not git_repo_stat.stat.exists
+  register: git_init_result
+
+- name: Add all files to git
+  ansible.builtin.command:
+    cmd: git add .
+    chdir: '{{ nix_flake_repo_path }}'
+  when: not git_repo_stat.stat.exists
+  changed_when: true
+
+- name: Check if initial commit exists
+  ansible.builtin.command:
+    cmd: git log -1
+    chdir: '{{ nix_flake_repo_path }}'
+  register: git_log_check
+  changed_when: false
+  failed_when: false
+
+- name: Create initial commit
+  ansible.builtin.command:
+    cmd: git commit -m "{{ nix_flake_repo_git_commit_message }}"
+    chdir: '{{ nix_flake_repo_path }}'
+  when: git_log_check.rc != 0
+  register: git_commit_result
+  changed_when: true
+
+- name: Configure git remote if URL provided
+  ansible.builtin.command:
+    cmd: git remote add origin "{{ nix_flake_repo_github_url }}"
+    chdir: '{{ nix_flake_repo_path }}'
+  when:
+    - nix_flake_repo_github_url | length > 0
+    - not git_repo_stat.stat.exists
+  register: git_remote_result
+  failed_when: false
+  changed_when: git_remote_result.rc == 0
+
+- name: Display git initialization results
+  ansible.builtin.debug:
+    msg:
+      - '✓ Git repository initialized'
+      - '  Location: {{ nix_flake_repo_path }}'
+      - "  Initial commit: {{ 'created' if git_commit_result.changed | default(false) else 'already exists' }}"
+      - "  Remote: {{ nix_flake_repo_github_url if nix_flake_repo_github_url | length > 0 else 'not configured' }}"

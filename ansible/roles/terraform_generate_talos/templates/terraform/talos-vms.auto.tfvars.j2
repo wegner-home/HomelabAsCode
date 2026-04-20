@@ -1,0 +1,110 @@
+# Talos K8s Cluster Configuration (auto-generated from Ansible inventory)
+# Generated on: {{ ansible_date_time.iso8601 }}
+# Source: ansible/roles/tf_build_inv_nix
+#
+# DO NOT EDIT MANUALLY - Changes will be overwritten
+# Modify inventory host_vars/ and group_vars/talos/cluster.yml, then regenerate
+
+# -----------------------------------------------
+# Cluster-level settings
+# -----------------------------------------------
+talos_cluster = {
+  enabled      = {{ "true" if global_talos_cluster.enabled else "false" }}
+  target_node  = "{{ global_talos_cluster.target_node }}"
+  target_nodes = [
+{% if global_talos_cluster.target_nodes | default([]) | length > 0 %}
+{% for node in global_talos_cluster.target_nodes %}
+    "{{ node }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+{% else %}
+    # Empty - using default target_node for all VMs
+{% endif %}
+  ]
+
+  # Network
+  subnet_key = "{{ global_talos_cluster.subnet_key }}"
+  cidr       = "{{ global_talos_cluster.cidr.split('/')[-1] }}"
+{% if global_talos_cluster.ip_gateway is defined and global_talos_cluster.ip_gateway %}
+  ip_gateway = "{{ global_talos_cluster.ip_gateway }}"
+{% endif %}
+{% if global_talos_cluster.ip_dns is defined and global_talos_cluster.ip_dns | length > 0 %}
+  ip_dns = [
+{% for dns in global_talos_cluster.ip_dns %}
+    "{{ dns }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+  ]
+{% endif %}
+
+  # IP info (informational — node IPs are explicit below)
+  ip_start_controlplane = "{{ global_talos_cluster.controlplane.ip_start }}"
+  ip_start_worker       = "{{ global_talos_cluster.worker.ip_start }}"
+  metallb_address_pool  = "{{ global_talos_cluster.metallb.address_pool | default('') }}"
+
+  # ISO
+  iso_file    = "{{ global_talos_cluster.iso_file }}"
+  iso_storage = "{{ global_talos_cluster.iso_storage }}"
+
+  # Talos Factory
+  download_iso      = {{ "true" if global_talos_cluster.download_iso else "false" }}
+  talos_version     = "{{ global_talos_cluster.talos_version }}"
+  talos_arch        = "{{ global_talos_cluster.talos_arch }}"
+  iso_download_path = "{{ global_talos_cluster.iso_download_path }}"
+  talos_extensions  = [
+{% for ext in global_talos_cluster.talos_extensions %}
+    "{{ ext.name }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+  ]
+
+  # Storage
+  disk_storage = "{{ global_talos_cluster.disk_storage }}"
+}
+
+# -----------------------------------------------
+# Control plane nodes ({{ _talos_merged_cp_nodes | length }} total)
+# -----------------------------------------------
+talos_controlplane_nodes = {
+{% for name, node in _talos_merged_cp_nodes | dictsort %}
+  "{{ name }}" = {
+    target_node  = "{{ node.target_node }}"
+    cores        = {{ node.cores }}
+    memory       = {{ node.memory }}
+    disk_size    = "{{ node.disk_size }}"
+    disk_storage = "{{ node.disk_storage | default(global_talos_cluster.disk_storage) }}"
+    ip_address   = "{{ node.ip_address }}"
+    mac_address  = "{{ node.mac_address }}"
+    bridge       = "{{ node.bridge | default('vmbr0') }}"
+    iso_file     = "{{ node.iso_file | default(global_talos_cluster.iso_file) }}"
+    # source: {{ node._source }}
+  }
+{% endfor %}
+}
+
+# -----------------------------------------------
+# Worker nodes ({{ _talos_merged_worker_nodes | length }} total)
+# -----------------------------------------------
+talos_worker_nodes = {
+{% for name, node in _talos_merged_worker_nodes | dictsort %}
+  "{{ name }}" = {
+    target_node  = "{{ node.target_node }}"
+    cores        = {{ node.cores }}
+    memory       = {{ node.memory }}
+    disk_size    = "{{ node.disk_size }}"
+    disk_storage = "{{ node.disk_storage | default(global_talos_cluster.disk_storage) }}"
+    ip_address   = "{{ node.ip_address }}"
+    mac_address  = "{{ node.mac_address }}"
+    bridge       = "{{ node.bridge | default('vmbr0') }}"
+    iso_file     = "{{ node.iso_file | default(global_talos_cluster.iso_file) }}"
+    # source: {{ node._source }}
+  }
+{% endfor %}
+}
+
+# -----------------------------------------------
+# Proxmox node management IPs (for SSH-based operations)
+# -----------------------------------------------
+proxmox_node_ips = {
+{% for node_name, node_creds in tf_build_inv_nix_proxmox_nodes.items() | sort %}
+{%   set ip = node_creds.api_url | regex_replace('^https://([^:]+):.*$', '\\1') %}
+  "{{ node_name }}" = "{{ ip }}"
+{% endfor %}
+}

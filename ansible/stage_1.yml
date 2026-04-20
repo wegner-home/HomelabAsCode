@@ -1,0 +1,96 @@
+---
+# Stage 1: Bootstrap Proxmox nodes
+# This playbook bootstraps Proxmox nodes with necessary configuration
+#
+# Play 1: Per-node setup + cluster formation
+# Play 2: Cluster-wide API users/tokens (run_once) + VM templates
+
+# ====================================================================
+# Play 1 — Per-node bootstrap + cluster formation
+# ====================================================================
+- name: Stage 1 - Per-node bootstrap & cluster formation
+  hosts: proxmox_nodes
+  gather_facts: true
+  tags:
+    - stage_1
+    - bootstrap
+    - proxmox
+
+  pre_tasks:
+    - name: Load and merge vault secrets
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/helpers/load_vaults.yml"
+
+  roles:
+    - role: proxmox_repos
+      tags: ["once", "prox", "bootstrap"]
+    - role: bootstrap_proxmox
+      tags: ["once", "prox", "bootstrap"]
+    - role: proxmox_cluster
+      tags: ["once", "prox", "cluster"]
+
+# ====================================================================
+# Play 2 — Cluster-wide API setup (run_once) + VM templates
+# ====================================================================
+# After clustering, pveum replicates across all nodes automatically.
+# API users/tokens only need to be created on a single node.
+- name: Stage 1 - Cluster-wide API setup & templates
+  hosts: proxmox_nodes
+  gather_facts: false
+  tags:
+    - stage_1
+    - bootstrap
+    - proxmox
+
+  pre_tasks:
+    - name: Load and merge vault secrets
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/helpers/load_vaults.yml"
+
+  tasks:
+    # -- Cluster-wide: API users & tokens (run_once) ----------------
+    - name: Create Ansible API user and token
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/roles/bootstrap_proxmox/tasks/_create_api_user.yml"
+      vars:
+        _api_user_name: ansible
+        _api_vault_fact_name: proxmox_ansible_secrets
+        _api_vault_token_id_key: ansible_token_id
+        _api_vault_token_secret_key: ansible_token_secret
+      run_once: true
+      tags: ["once", "prox", "api"]
+
+    - name: Create Terraform API user and token
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/roles/bootstrap_proxmox/tasks/_create_api_user.yml"
+      vars:
+        _api_user_name: terraform
+        _api_vault_fact_name: proxmox_terraform_secrets
+        _api_vault_token_id_key: terraform_token_id
+        _api_vault_token_secret_key: terraform_token_secret
+      run_once: true
+      tags: ["once", "prox", "api"]
+
+    - name: Initialize new_secrets
+      ansible.builtin.set_fact:
+        new_secrets: {}
+      run_once: true
+      tags: ["once", "prox", "api"]
+
+    - name: Merge Proxmox secrets for vault
+      ansible.builtin.set_fact:
+        new_secrets: "{{ new_secrets | combine(proxmox_ansible_secrets | default({}), proxmox_terraform_secrets | default({}), recursive=True) }}"
+      run_once: true
+      tags: ["once", "prox", "api"]
+
+    - name: Persist Proxmox secrets to SOPS
+      ansible.builtin.include_role:
+        name: sops_write
+      when: new_secrets is defined and new_secrets | length > 0
+      run_once: true
+      tags: ["once", "prox", "api"]
+
+  # -- Per-node: VM templates --------------------------------------
+  roles:
+    - role: proxmox_template
+      tags: ["every_run", "cloud_init", "template"]

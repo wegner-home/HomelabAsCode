@@ -1,0 +1,180 @@
+---
+# SSH CA setup tasks
+
+- name: Display SSH CA setup information
+  ansible.builtin.debug:
+    msg:
+      - 'Setting up SSH Certificate Authorities'
+      - 'Base directory: {{ bootstrap_localhost_ssh_base_dir }}'
+      - 'User CA: {{ bootstrap_localhost_ssh_user_ca_dir }}'
+      - 'Host CA: {{ bootstrap_localhost_ssh_host_ca_dir }}'
+
+# ===============================================
+# Create SSH CA directories
+# ===============================================
+- name: Ensure SSH CA directories exist
+  become: true
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    mode: '0750'
+    owner: '{{ _resolved_owner }}'
+  loop:
+    - '{{ bootstrap_localhost_ssh_base_dir }}'
+    - '{{ bootstrap_localhost_ssh_user_ca_dir }}'
+    - '{{ bootstrap_localhost_ssh_host_ca_dir }}'
+    - '{{ bootstrap_localhost_ssh_user_certs_dir }}'
+    - '{{ bootstrap_localhost_ssh_host_certs_dir }}'
+
+# ===============================================
+# User CA - Signs user certificates for authentication
+# ===============================================
+- name: Check if User CA key pair exists
+  ansible.builtin.stat:
+    path: '{{ bootstrap_localhost_ssh_user_ca_dir }}/{{ bootstrap_localhost_ssh_user_ca_key_name }}'
+  register: ssh_user_ca_key_stat
+
+- name: Generate User CA key pair if it does not exist
+  become: true
+  community.crypto.openssh_keypair:
+    path: '{{ bootstrap_localhost_ssh_user_ca_dir }}/{{ bootstrap_localhost_ssh_user_ca_key_name }}'
+    type: ed25519
+    mode: '0600'
+    owner: '{{ _resolved_owner }}'
+    comment: '{{ bootstrap_localhost_ssh_user_ca_comment }}'
+    force: false
+  register: ssh_user_ca_generated
+  when: not ssh_user_ca_key_stat.stat.exists
+
+- name: Set permissions on User CA public key
+  become: true
+  ansible.builtin.file:
+    path: '{{ bootstrap_localhost_ssh_user_ca_dir }}/{{ bootstrap_localhost_ssh_user_ca_key_name }}.pub'
+    mode: '0644'
+    owner: '{{ _resolved_owner }}'
+
+- name: Read User CA public key
+  ansible.builtin.slurp:
+    src: '{{ bootstrap_localhost_ssh_user_ca_dir }}/{{ bootstrap_localhost_ssh_user_ca_key_name }}.pub'
+  register: ssh_user_ca_public_key_content
+
+# ===============================================
+# Host CA - Signs host certificates for host verification
+# ===============================================
+- name: Check if Host CA key pair exists
+  ansible.builtin.stat:
+    path: '{{ bootstrap_localhost_ssh_host_ca_dir }}/{{ bootstrap_localhost_ssh_host_ca_key_name }}'
+  register: ssh_host_ca_key_stat
+
+- name: Generate Host CA key pair if it does not exist
+  become: true
+  community.crypto.openssh_keypair:
+    path: '{{ bootstrap_localhost_ssh_host_ca_dir }}/{{ bootstrap_localhost_ssh_host_ca_key_name }}'
+    type: ed25519
+    mode: '0600'
+    owner: '{{ _resolved_owner }}'
+    comment: '{{ bootstrap_localhost_ssh_host_ca_comment }}'
+    force: false
+  register: ssh_host_ca_generated
+  when: not ssh_host_ca_key_stat.stat.exists
+
+- name: Set permissions on Host CA public key
+  become: true
+  ansible.builtin.file:
+    path: '{{ bootstrap_localhost_ssh_host_ca_dir }}/{{ bootstrap_localhost_ssh_host_ca_key_name }}.pub'
+    mode: '0644'
+    owner: '{{ _resolved_owner }}'
+
+- name: Read Host CA public key
+  ansible.builtin.slurp:
+    src: '{{ bootstrap_localhost_ssh_host_ca_dir }}/{{ bootstrap_localhost_ssh_host_ca_key_name }}.pub'
+  register: ssh_host_ca_public_key_content
+
+# ===============================================
+# Create CA README and known_hosts configuration
+# ===============================================
+- name: Create SSH CA README file
+  become: true
+  ansible.builtin.copy:
+    content: |
+      # SSH Certificate Authority
+      # Generated: {{ ansible_date_time.iso8601 }}
+
+      ## Directory Structure
+      {{ bootstrap_localhost_ssh_base_dir }}/
+      ├── ca/
+      │   ├── user/     # User CA - signs user certificates
+      │   │   ├── {{ bootstrap_localhost_ssh_user_ca_key_name }}      # Private key (PROTECT!)
+      │   │   └── {{ bootstrap_localhost_ssh_user_ca_key_name }}.pub  # Public key
+      │   └── host/     # Host CA - signs host certificates
+      │       ├── {{ bootstrap_localhost_ssh_host_ca_key_name }}      # Private key (PROTECT!)
+      │       └── {{ bootstrap_localhost_ssh_host_ca_key_name }}.pub  # Public key
+      ├── users/        # User certificates
+      └── hosts/        # Host certificates
+
+      ## User CA Public Key
+      {{ ssh_user_ca_public_key_content.content | b64decode | trim }}
+
+      ## Host CA Public Key
+      {{ ssh_host_ca_public_key_content.content | b64decode | trim }}
+
+      ## Configuration
+
+      ### On SSH Servers (sshd_config)
+      Add to trust user certificates signed by User CA:
+        TrustedUserCAKeys /etc/ssh/ca-keys/{{ bootstrap_localhost_ssh_user_ca_key_name }}.pub
+
+      ### On SSH Clients (~/.ssh/known_hosts)
+      Add to trust host certificates signed by Host CA:
+        @cert-authority *.{{ global_domain }} {{ ssh_host_ca_public_key_content.content | b64decode | trim }}
+
+      ### For NixOS (configuration.nix or home-manager)
+      ```nix
+      # In your NixOS configuration
+      services.openssh = {
+        enable = true;
+        settings = {
+          TrustedUserCAKeys = "/etc/ssh/ca-keys/{{ bootstrap_localhost_ssh_user_ca_key_name }}.pub";
+        };
+      };
+
+      # In home-manager for client trust
+      programs.ssh = {
+        enable = true;
+        extraConfig = ''
+          Host *.{{ global_domain }}
+            CertificateFile ~/.ssh/id_ed25519-cert.pub
+        '';
+        knownHosts = {
+          "iac-ca" = {
+            certAuthority = true;
+            hostNames = [ "*.{{ global_domain }}" ];
+            publicKeyFile = {{ bootstrap_localhost_ssh_host_ca_dir }}/{{ bootstrap_localhost_ssh_host_ca_key_name }}.pub;
+          };
+        };
+      };
+      ```
+    dest: '{{ bootstrap_localhost_ssh_base_dir }}/README.txt'
+    mode: '0644'
+    owner: '{{ _resolved_owner }}'
+
+# ===============================================
+# Display CA information
+# ===============================================
+- name: Display SSH CA setup summary
+  ansible.builtin.debug:
+    msg:
+      - '=============================================='
+      - 'SSH Certificate Authorities Created'
+      - '=============================================='
+      - ''
+      - 'User CA (for signing user certificates):'
+      - '  Key: {{ bootstrap_localhost_ssh_user_ca_dir }}/{{ bootstrap_localhost_ssh_user_ca_key_name }}'
+      - '  Public: {{ ssh_user_ca_public_key_content.content | b64decode | trim }}'
+      - ''
+      - 'Host CA (for signing host certificates):'
+      - '  Key: {{ bootstrap_localhost_ssh_host_ca_dir }}/{{ bootstrap_localhost_ssh_host_ca_key_name }}'
+      - '  Public: {{ ssh_host_ca_public_key_content.content | b64decode | trim }}'
+      - ''
+      - 'Documentation: {{ bootstrap_localhost_ssh_base_dir }}/README.txt'
+      - '=============================================='

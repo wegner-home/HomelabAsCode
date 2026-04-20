@@ -1,0 +1,38 @@
+---
+# Main tasks file for bootstrap_localhost role
+
+- name: Resolve file owner for localhost operations
+  ansible.builtin.set_fact:
+    _resolved_owner: '{{ ansible_env.SUDO_USER | default(ansible_user_id, true) }}'
+
+- name: Display bootstrap information
+  ansible.builtin.debug:
+    msg: 'Bootstrapping localhost for management'
+
+- name: Include directory setup tasks
+  ansible.builtin.include_tasks: directories.yml
+  tags:
+    - directories
+
+- name: Include user and group setup tasks
+  ansible.builtin.include_tasks: user_group.yml
+  tags:
+    - users
+    - groups
+
+- name: Include SSH CA setup tasks
+  ansible.builtin.include_tasks: ssh_ca.yml
+  tags:
+    - ssh
+    - ssh_ca
+
+- name: Include NixOS package verification tasks
+  ansible.builtin.include_tasks: packages.yml
+  tags:
+    - packages
+
+- name: Include NixOS configuration management tasks
+  ansible.builtin.include_tasks: nixos_config.yml
+  tags:
+    - nixos_config
+    - sudo

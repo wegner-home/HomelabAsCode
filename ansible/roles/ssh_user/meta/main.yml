@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: Manages SSH user keys and certificates (admin, service, and additional users)
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: GenericLinux
+      versions:
+        - all
+
+# Soft dependency: requires SSH CA files from bootstrap_localhost (asserted at runtime)
+dependencies: []

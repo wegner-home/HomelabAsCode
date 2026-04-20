@@ -1,0 +1,140 @@
+---
+# Phase 4.5: Bootstrap CNI (Cilium) via Helm
+# ================================================
+# When cni=none, Cilium must be installed BEFORE FluxCD can run,
+# because FluxCD pods need pod networking to schedule.
+#
+# This installs Cilium via Helm with the SAME release name, namespace,
+# and values as the FluxCD HelmRelease, so FluxCD seamlessly adopts
+# and manages it on first reconciliation.
+#
+# Skipped when:
+#   - CNI is not 'none' (Talos manages CNI natively)
+#   - Cilium is already running in the cluster
+
+# ===============================================
+# Wait for Kubernetes API to be reachable
+# ===============================================
+# After bootstrap, kube-apiserver may still be starting up.
+# Helm needs the API to be serving before it can install charts.
+#
+# The kubeconfig from talosctl points to the VIP (cluster endpoint).
+# During initial bootstrap the VIP should already be assigned (bootstrap.yml
+# waits for it), but if the API server on the VIP takes time we retry.
+- name: Set KUBECONFIG for helm/kubectl commands
+  ansible.builtin.set_fact:
+    _kubeconfig_env:
+      KUBECONFIG: "{{ talos_kubeconfig_path }}"
+
+- name: Wait for Kubernetes API to be reachable
+  ansible.builtin.command: kubectl cluster-info
+  environment: "{{ _kubeconfig_env }}"
+  register: _api_ready
+  changed_when: false
+  retries: 60
+  delay: 10
+  until: _api_ready.rc == 0
+
+# ===============================================
+# Check if Cilium is Already Installed
+# ===============================================
+- name: Check if Cilium is already deployed
+  ansible.builtin.command: >
+    helm status cilium
+    --namespace kube-system
+  environment: "{{ _kubeconfig_env }}"
+  register: _cilium_status
+  changed_when: false
+  failed_when: false
+
+- name: Set Cilium install needed fact
+  ansible.builtin.set_fact:
+    _cilium_install_needed: "{{ _cilium_status.rc != 0 }}"
+
+- name: Display Cilium status
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Cilium not found — will bootstrap via Helm'
+         if _cilium_install_needed | bool
+         else 'Cilium already installed (release: ' + (_cilium_status.stdout_lines | first | default('unknown')) + ') — skipping' }}
+
+# ===============================================
+# Install Cilium via Helm
+# ===============================================
+- name: Bootstrap Cilium CNI
+  when: _cilium_install_needed | bool
+  block:
+    - name: Add Cilium Helm repository
+      ansible.builtin.command: >
+        helm repo add cilium {{ talos_cilium_helm_repo }}
+      environment: "{{ _kubeconfig_env }}"
+      register: _helm_repo_add
+      changed_when: "'has been added' in _helm_repo_add.stdout"
+
+    - name: Update Helm repositories
+      ansible.builtin.command: helm repo update cilium
+      environment: "{{ _kubeconfig_env }}"
+      changed_when: true
+
+    - name: Install Cilium via Helm (matching FluxCD HelmRelease values)
+      ansible.builtin.command: >
+        helm install cilium cilium/cilium
+        --namespace kube-system
+        --version {{ talos_cilium_version }}
+        --set ipam.mode=kubernetes
+        --set kubeProxyReplacement=true
+        --set cgroup.autoMount.enabled=false
+        --set cgroup.hostRoot=/sys/fs/cgroup
+        --set k8sServiceHost=localhost
+        --set k8sServicePort=7445
+        --set securityContext.capabilities.ciliumAgent='{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}'
+        --set securityContext.capabilities.cleanCiliumState='{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}'
+        --set operator.replicas={{ [talos_controlplane_count | int, 1] | min }}
+        --set hubble.enabled=false
+      environment: "{{ _kubeconfig_env }}"
+      register: _cilium_install
+      changed_when: true
+
+    - name: Display Cilium install result
+      ansible.builtin.debug:
+        msg: '{{ _cilium_install.stdout_lines | default(["Cilium install completed"]) }}'
+
+# ===============================================
+# Wait for Cilium to be Ready
+# ===============================================
+- name: Wait for Cilium pods to be ready
+  when: _cilium_install_needed | bool
+  block:
+    - name: Wait for Cilium agent DaemonSet to be ready
+      ansible.builtin.command: >
+        kubectl rollout status daemonset/cilium
+        --namespace kube-system
+        --timeout={{ talos_cilium_ready_timeout }}
+      environment: "{{ _kubeconfig_env }}"
+      register: _cilium_ds_ready
+      changed_when: false
+
+    - name: Wait for Cilium operator to be ready
+      ansible.builtin.command: >
+        kubectl rollout status deployment/cilium-operator
+        --namespace kube-system
+        --timeout={{ talos_cilium_ready_timeout }}
+      environment: "{{ _kubeconfig_env }}"
+      register: _cilium_operator_ready
+      changed_when: false
+
+    - name: Wait for nodes to become Ready
+      ansible.builtin.command: >
+        kubectl wait --for=condition=Ready nodes --all
+        --timeout={{ talos_cilium_ready_timeout }}
+      environment: "{{ _kubeconfig_env }}"
+      register: _nodes_ready
+      changed_when: false
+
+    - name: Display CNI bootstrap result
+      ansible.builtin.debug:
+        msg:
+          - "--- CNI Bootstrap Complete ---"
+          - "Cilium {{ talos_cilium_version }} installed via Helm"
+          - "All nodes are Ready"
+          - "FluxCD will adopt this Helm release on first reconciliation"

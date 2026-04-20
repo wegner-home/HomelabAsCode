@@ -1,0 +1,271 @@
+---
+# Phase 1: Pre-flight checks and node discovery
+# Validates CLI tools, computes node IPs from inventory, validates endpoint.
+
+# ===============================================
+# Validate Bootstrap Mode
+# ===============================================
+- name: Validate bootstrap mode
+  ansible.builtin.assert:
+    that:
+      - talos_bootstrap_mode in ['bootstrap', 'upgrade', 'verify-only']
+    fail_msg: >
+      Invalid bootstrap_mode '{{ talos_bootstrap_mode }}'.
+      Must be one of: bootstrap, upgrade, verify-only
+    quiet: true
+
+# ===============================================
+# CLI Tool Checks
+# ===============================================
+- name: Check talosctl is installed
+  ansible.builtin.command: talosctl version --client --short
+  register: _talosctl_version
+  changed_when: false
+  failed_when: false
+
+- name: Fail if talosctl is not installed
+  ansible.builtin.fail:
+    msg: >
+      talosctl is not installed. Install it:
+      curl -sL https://talos.dev/install | sh
+  when: _talosctl_version.rc != 0
+
+- name: Extract talosctl version number
+  ansible.builtin.set_fact:
+    _talosctl_ver: >-
+      {{ _talosctl_version.stdout | regex_search('v?(\d+\.\d+\.\d+)', '\1') | first | default('0.0.0') }}
+
+- name: Verify talosctl minimum version
+  ansible.builtin.assert:
+    that:
+      - _talosctl_ver is version(talos_min_talosctl_version, '>=')
+    fail_msg: >
+      talosctl {{ _talosctl_ver }} is too old.
+      Minimum required: {{ talos_min_talosctl_version }}
+    quiet: true
+
+- name: Check kubectl is installed
+  ansible.builtin.command: kubectl version --client --output=json
+  register: _kubectl_version
+  changed_when: false
+  failed_when: false
+
+- name: Fail if kubectl is not installed
+  ansible.builtin.fail:
+    msg: >
+      kubectl is not installed. Install it:
+      https://kubernetes.io/docs/tasks/tools/
+  when: _kubectl_version.rc != 0
+
+- name: Extract kubectl version number
+  ansible.builtin.set_fact:
+    _kubectl_ver: >-
+      {{ (_kubectl_version.stdout | from_json).clientVersion.gitVersion |
+         regex_search('v?(\d+\.\d+\.\d+)', '\1') | first | default('0.0.0') }}
+
+- name: Verify kubectl minimum version
+  ansible.builtin.assert:
+    that:
+      - _kubectl_ver is version(talos_min_kubectl_version, '>=')
+    fail_msg: >
+      kubectl {{ _kubectl_ver }} is too old.
+      Minimum required: {{ talos_min_kubectl_version }}
+    quiet: true
+
+- name: Check flux CLI is installed
+  ansible.builtin.command: flux version --client
+  register: _flux_version
+  changed_when: false
+  failed_when: false
+  when: talos_fluxcd_enabled | bool
+
+- name: Fail if flux CLI is not installed (FluxCD enabled)
+  ansible.builtin.fail:
+    msg: >
+      flux CLI is not installed but FluxCD is enabled. Install it:
+      curl -s https://fluxcd.io/install.sh | bash
+  when:
+    - talos_fluxcd_enabled | bool
+    - _flux_version.rc | default(1) != 0
+
+- name: Check helm is installed (when cni=none)
+  ansible.builtin.command: helm version --short
+  register: _helm_version
+  changed_when: false
+  failed_when: false
+  when: talos_cni == 'none'
+
+- name: Fail if helm is not installed (cni=none requires Helm for Cilium bootstrap)
+  ansible.builtin.fail:
+    msg: >-
+      helm CLI is not installed but cni=none requires it to bootstrap Cilium.
+      Add 'kubernetes-helm' to shell.nix or install via:
+      curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  when:
+    - talos_cni == 'none'
+    - _helm_version.rc | default(1) != 0
+
+- name: Check sops is installed (when encryption enabled)
+  ansible.builtin.command: sops --version
+  register: _sops_version
+  changed_when: false
+  failed_when: false
+  when: talos_sops_encrypt | bool
+
+- name: Warn if sops is not installed
+  ansible.builtin.debug:
+    msg: "WARNING: sops is not installed but sops_encrypt is enabled. Secrets will NOT be encrypted."
+  when:
+    - talos_sops_encrypt | bool
+    - _sops_version.rc | default(1) != 0
+
+# ===============================================
+# Node IP Discovery (from host_vars — source of truth)
+# ===============================================
+- name: Collect control plane IPs from host_vars
+  ansible.builtin.set_fact:
+    talos_controlplane_ips: >-
+      {{ groups['talos_control_plane'] | default([]) |
+         map('extract', hostvars, ['global_vm_definitions']) |
+         map('dict2items') | map('first') | map(attribute='value.ip_address') |
+         list }}
+
+- name: Validate control plane IP count matches expected
+  ansible.builtin.assert:
+    that:
+      - talos_controlplane_ips | length == talos_controlplane_count | int
+    fail_msg: >
+      Expected {{ talos_controlplane_count }} control plane nodes in inventory
+      but found {{ talos_controlplane_ips | length }}.
+      Ensure host_vars exist for all CP nodes and they are in the talos_control_plane group.
+    quiet: true
+
+- name: Collect worker IPs from host_vars
+  ansible.builtin.set_fact:
+    talos_worker_ips: >-
+      {{ groups['talos_workers'] | default([]) |
+         map('extract', hostvars, ['global_vm_definitions']) |
+         map('dict2items') | map('first') | map(attribute='value.ip_address') |
+         list }}
+  when: talos_worker_count | int > 0
+
+- name: Set empty worker list for single-node clusters
+  ansible.builtin.set_fact:
+    talos_worker_ips: []
+  when: talos_worker_count | int == 0
+
+- name: Validate worker IP count matches expected
+  ansible.builtin.assert:
+    that:
+      - talos_worker_ips | length == talos_worker_count | int
+    fail_msg: >
+      Expected {{ talos_worker_count }} worker nodes in inventory
+      but found {{ talos_worker_ips | length }}.
+      Ensure host_vars exist for all worker nodes and they are in the talos_workers group.
+    quiet: true
+  when: talos_worker_count | int > 0
+
+- name: Compute all node IPs
+  ansible.builtin.set_fact:
+    talos_all_node_ips: "{{ talos_controlplane_ips + talos_worker_ips }}"
+
+- name: Set first control plane IP (bootstrap node)
+  ansible.builtin.set_fact:
+    talos_bootstrap_node_ip: "{{ talos_controlplane_ips[0] }}"
+
+# ===============================================
+# Validate Cluster Configuration
+# ===============================================
+- name: Validate cluster endpoint is set
+  ansible.builtin.assert:
+    that:
+      - talos_cluster_endpoint | length > 0
+      - talos_cluster_endpoint is regex('^https://')
+    fail_msg: >
+      cluster_endpoint must be a valid HTTPS URL.
+      Got: '{{ talos_cluster_endpoint }}'
+    quiet: true
+
+- name: Validate VIP matches endpoint (when VIP enabled)
+  ansible.builtin.assert:
+    that:
+      - talos_vip_ip in talos_cluster_endpoint
+    fail_msg: >
+      VIP IP '{{ talos_vip_ip }}' does not match cluster_endpoint '{{ talos_cluster_endpoint }}'.
+      The cluster_endpoint should use the VIP address.
+    quiet: true
+  when: talos_vip_enabled | bool
+
+- name: Validate single-node config consistency
+  ansible.builtin.assert:
+    that:
+      - talos_allow_scheduling_on_controlplane | bool
+    fail_msg: >
+      Single-node cluster (worker_count=0) requires allow_scheduling_on_controlplane=true
+    quiet: true
+  when: talos_worker_count | int == 0
+
+- name: Validate node counts
+  ansible.builtin.assert:
+    that:
+      - talos_controlplane_count | int >= 1
+      - talos_controlplane_count | int <= 9
+      - talos_worker_count | int >= 0
+      - talos_worker_count | int <= 20
+    fail_msg: >
+      Invalid node counts. Control planes: 1-9, Workers: 0-20.
+      Got: CP={{ talos_controlplane_count }}, Workers={{ talos_worker_count }}
+    quiet: true
+
+- name: Validate FluxCD git_repo is set when enabled
+  ansible.builtin.assert:
+    that:
+      - talos_fluxcd_git_repo | length > 0
+    fail_msg: >
+      FluxCD is enabled but git_repo is empty.
+      Set fluxcd.git_repo in config/{{ talos_env }}/infrastructure.yml
+    quiet: true
+  when: talos_fluxcd_enabled | bool
+
+# ===============================================
+# Create Output Directory
+# ===============================================
+- name: Ensure artifact output directory exists
+  ansible.builtin.file:
+    path: "{{ talos_output_dir }}"
+    state: directory
+    mode: "0700"
+    owner: "{{ ansible_user_id }}"
+    group: "{{ ansible_user_gid }}"
+
+# ===============================================
+# Discovery Summary
+# ===============================================
+- name: Display pre-flight summary
+  ansible.builtin.debug:
+    msg:
+      - "--- Pre-flight Summary ---"
+      - "talosctl: v{{ _talosctl_ver }}"
+      - "kubectl:  v{{ _kubectl_ver }}"
+      - "Bootstrap mode: {{ talos_bootstrap_mode }}"
+      - "Bootstrap node: {{ talos_bootstrap_node_ip }}"
+      - 'Control plane IPs: {{ talos_controlplane_ips | join(", ") }}'
+      - 'Worker IPs: {{ talos_worker_ips | join(", ") if talos_worker_ips | length > 0 else "none (single-node)" }}'
+      - "Cluster endpoint: {{ talos_cluster_endpoint }}"
+      - 'VIP: {{ talos_vip_ip if talos_vip_enabled else "disabled" }}'
+      - "Output dir: {{ talos_output_dir }}"
+
+# ===============================================
+# Wait for Nodes (bootstrap/upgrade only)
+# ===============================================
+- name: Wait for Talos API to be reachable on all nodes
+  ansible.builtin.wait_for:
+    host: "{{ item }}"
+    port: "{{ talos_api_port }}"
+    timeout: "{{ talos_wait_timeout }}"
+    delay: "{{ talos_wait_delay }}"
+    state: started
+  loop: "{{ talos_all_node_ips }}"
+  loop_control:
+    label: "{{ item }}:{{ talos_api_port }}"
+  when: talos_bootstrap_mode in ['bootstrap', 'upgrade']

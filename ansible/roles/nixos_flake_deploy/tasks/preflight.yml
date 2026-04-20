@@ -1,0 +1,65 @@
+---
+# Pre-flight checks for NixOS flake deployment
+
+- name: Verify NixOS system
+  ansible.builtin.raw: nixos-version
+  register: nixos_version_check
+  changed_when: false
+  failed_when: nixos_version_check.rc != 0
+
+- name: Display NixOS version
+  ansible.builtin.debug:
+    msg: 'Target system running: {{ nixos_version_check.stdout | trim }}'
+
+- name: Check nix flakes support
+  ansible.builtin.raw: nix flake --version
+  register: nix_flake_check
+  changed_when: false
+  failed_when: false
+
+- name: Warning if flakes not enabled
+  ansible.builtin.debug:
+    msg: 'WARNING: Nix flakes not available. Ensure experimental-features are enabled.'
+  when: nix_flake_check.rc != 0
+
+- name: Validate flake configuration variables
+  ansible.builtin.assert:
+    that:
+      - (host_flakes | default([]) | length > 0) or (nixos_flake_host is defined and nixos_flake_host | length > 0)
+      - nixos_flake_repo is defined or not nixos_flake_deploy_from_repo
+    fail_msg: 'Missing required flake configuration variables (host_flakes or nixos_flake_host)'
+    success_msg: 'Flake configuration variables validated'
+
+- name: Display deployment mode
+  ansible.builtin.debug:
+    msg: >-
+      Deployment mode: {{
+        'Multi-flake (' + (host_flakes | join(', ')) + ')'
+        if host_flakes | default([]) | length > 0
+        else 'Single flake (' + nixos_flake_host + ')'
+      }}
+
+- name: Check if deploying from remote repository
+  ansible.builtin.debug:
+    msg: 'Will deploy from remote repository: {{ nixos_flake_repo }}'
+  when: nixos_flake_deploy_from_repo | bool
+
+- name: Check if deploying from local templates
+  ansible.builtin.debug:
+    msg: 'Will deploy from local templates to: {{ nixos_flake_deploy_dir }}'
+  when: not nixos_flake_deploy_from_repo | bool
+
+- name: Ensure required directories exist
+  ansible.builtin.raw: 'mkdir -p /var/lib/{{ project_name }} /etc/nixos && chmod 0755 /var/lib/{{ project_name }} /etc/nixos'
+  become: true
+  changed_when: false
+
+- name: Check SSH service status
+  ansible.builtin.raw: systemctl is-active sshd
+  register: ssh_service
+  changed_when: false
+  failed_when: false
+
+- name: Display SSH service status
+  ansible.builtin.debug:
+    msg: 'SSH service is {{ "active" if ssh_service.rc | default(1) == 0 else "inactive/unknown" }}'

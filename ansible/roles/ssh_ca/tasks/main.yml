@@ -1,0 +1,23 @@
+---
+# Main tasks for ssh_ca role
+# SSH Certificate Authority setup for NixOS
+
+- name: Display SSH CA setup information
+  ansible.builtin.debug:
+    msg:
+      - 'Setting up SSH Certificate Authority'
+      - 'Host: {{ ssh_ca_fqdn }}'
+      - 'CA Key: {{ ssh_ca_dir }}/{{ ssh_ca_key_name }}'
+  when: ssh_ca_enable | bool
+
+- name: Include SSH CA setup tasks
+  ansible.builtin.include_tasks: setup_ca.yml
+  when: ssh_ca_enable | bool
+  tags:
+    - ssh_ca
+    - security
+
+- name: Skip SSH CA setup (disabled)
+  ansible.builtin.debug:
+    msg: 'SSH CA is disabled for this host (set host_ssh_ca_enable: true to enable)'
+  when: not (ssh_ca_enable | bool)

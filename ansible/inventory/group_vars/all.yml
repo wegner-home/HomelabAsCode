@@ -1,0 +1,351 @@
+# Global variables for all hosts
+
+# ===============================================
+# Main Settings
+# ===============================================
+project_name: "my_environment"
+project_root: "/home/phil/dev/iac-tests/{{ project_name }}"
+# Domain and hostname settings
+global_domain: "my_domain.local"
+global_timezone: "Europe/Berlin"
+
+# Default system user for services
+global_service_user: "svc-ansible"
+global_admin_user: "adm-admin_user"
+global_users:
+  - name: "{{ global_service_user }}"
+    groups: "{{ project_name }}"
+    shell: "/bin/bash"
+    create_home: True
+    system: False
+    principals:
+      - "{{ global_service_user }}"
+      - "{{ project_name }}"
+
+  - name: "{{ global_admin_user}}"
+    groups: "{{ project_name }}-admin,{{ project_name }}"
+    shell: "/bin/bash"
+    create_home: True
+    system: False
+    principals:
+      - "{{ global_admin_user}}"
+      - "{{ project_name }}-admin"
+      - "{{ project_name }}"
+
+
+# TODO redifine global_users as a dict with all groups directly
+global_group: "{{ project_name }}"
+global_admin_group: "{{ project_name }}-admin"
+global_groups:
+  - "{{ global_group }}"
+  - "{{ global_admin_group }}"
+
+# ===============================================
+# System Defaults (single source of truth)
+# ===============================================
+system_timezone: "{{ global_timezone }}"
+system_locale: "en_US.UTF-8"
+system_keymap: "de"
+enable_debug_logging: false
+test_mode: false
+
+# ===============================================
+# Global Backup Configuration
+# ===============================================
+global_backup_repository: "/mnt/backups/restic"
+# Default exclude patterns
+global_backup_exclude_patterns:
+  - "*.log"
+  - "*.tmp"
+  - "**/cache"
+  - "**/Cache"
+  - "**/.cache"
+  - "**/tmp"
+  - "**/node_modules"
+  - "**/__pycache__"
+
+# Restic Defaults
+# Roles should use: restic_exclude_patterns | default(global_backup_exclude_patterns)
+restic_exclude_patterns: "{{ global_backup_exclude_patterns }}"
+restic_retention:
+  keep_last: 3
+  keep_daily: 7
+  keep_weekly: 4
+  keep_monthly: 6
+  keep_yearly: 2
+restic_backup_enable: true
+restic_backup_schedule: "daily"
+
+# Default backup paths for all NixOS VMs
+# Override in group_vars for groups with extra paths
+restic_backup_paths:
+  - /etc/nixos
+  - /var/lib/sops-nix
+  - /home/{{ global_service_user }}/.config
+  - /home/*/Documents
+  - /home/*/.ssh
+
+# ===============================================
+# Global Network Configuration
+# ===============================================
+# DNS and NTP servers
+global_dns_servers:
+  - "10.10.100.1"
+  - "1.1.1.1"
+
+global_ntp_servers:
+  - "pool.ntp.org"
+
+# Default gateway for all VMs
+global_default_gateway: "10.10.100.1"
+
+
+# Network Subnets for Terraform/OPNsense
+opnsense_kea_subnets:
+  main:
+    subnet: "10.0.0.0/8"
+    description: "Primary subnet"
+    gateway: "10.10.100.1"
+    dns_servers:
+      - "10.10.100.1"
+    pools:
+      - "10.0.1.0/24"
+# Static Reservations (Non-Terraform Devices)
+
+opnsense_kea_reservations:
+  truenas:
+    hostname: "truenas"
+    dns_hostnames:
+      - "truenas"
+      - "nas"
+    ip_address: "10.10.100.50"
+    mac_address: "52:54:00:10:10:20"
+    subnet_key: "main"
+    description: "TrueNAS core storage"
+    dns_enabled: true
+    dhcp_enabled: true
+
+  ap-lab:
+    hostname: "wifi-ap"
+    dns_hostnames:
+      - "wifi-ap"
+      - "wifi"
+    ip_address: "10.10.100.30"
+    mac_address: "52:54:00:10:11:10"
+    subnet_key: "main"
+    description: "Lab access point"
+    dns_enabled: true
+    dhcp_enabled: true
+
+# ===============================================
+# SSH Settings
+# ===============================================
+global_ssh_base_dir: "/var/local/{{ project_name }}/ssh"
+global_ssh_admin_key: "~/.ssh/id_ed25519"
+global_ssh_ca_base_dir: "/var/local/{{ project_name }}/ssh_ca"
+global_ssh_ca_key_name: "{{ project_name }}_ca"
+global_ssh_ca_expiry_days: 365
+global_ssh_ca_server: "localhost"
+
+# SSH User CA
+global_ssh_user_ca_dir: "{{ global_ssh_base_dir }}/ca/user"
+global_ssh_user_ca_key_name: "{{ project_name }}_user_ca"
+global_ssh_user_cert_validity: "+365d"
+# SSH Host CA
+global_ssh_host_ca_dir: "{{ global_ssh_base_dir }}/ca/host"
+global_ssh_host_ca_key_name: "{{ project_name }}_host_ca"
+global_ssh_host_cert_validity: "+730d"
+
+
+
+# SSH certificate directories (derived from global_ssh_base_dir in main.yml)
+global_ssh_user_cert_dir: "{{ global_ssh_base_dir }}/users"
+global_ssh_host_cert_dir: "{{ global_ssh_base_dir }}/hosts"
+
+
+
+# ===============================================
+# Secret Management (SOPS/Age)
+# ===============================================
+# SOPS / Secrets configuration
+sops_age_keyfile: "{{ project_root }}/secrets/sops/keys.txt"
+
+global_sops_admin_age_key: '{{ (lookup("community.sops.sops", global_sops_secrets_file, output_type="json") | from_json).vault_secrets.sops.admin_public_key | default('''') }}'
+# Host keys are persisted to runtime_secrets.sops.yaml by sops_age (Step 2b).
+# On first-ever run the file may not contain sops_host_keys yet — default to {}.
+global_sops_host_keys: >-
+  {{
+    (lookup("community.sops.sops",
+            global_sops_secrets_dir + "/runtime_secrets.sops.yaml",
+            output_type="json", empty_on_not_exist=true)
+     | default("{}", true)
+     | from_json).sops_host_keys
+    | default({})
+  }}
+# NOTE: sops_secrets_path is computed by BuildContext from paths.secrets_dir + env_name
+global_sops_secrets_file: "{{ global_sops_secrets_dir }}/secrets.sops.yaml"
+# Derived from sops_age_keyfile (required by community.sops plugin)
+global_sops_key_path: "{{ sops_age_keyfile }}"
+
+# Per-environment SOPS secrets paths
+global_sops_secrets_dir: "{{ project_root }}/secrets/{{ project_name }}"
+global_sops_runtime_file: "{{ global_sops_secrets_dir }}/runtime_secrets.sops.yaml"
+
+# SOPS secrets mapping by host role
+#
+# Each role defines which vault keys map to which SOPS secret names.
+# Looked up via: sops_age_secrets_by_role[host_role]
+# Consumer:      roles/sops_age/tasks/remote_host.yml
+#
+# host_role values come from group_vars (admin_vms, gitlab_vms, etc.)
+# Hosts without host_role default to "service" at lookup time.
+
+sops_age_secrets_by_role:
+  # GitLab server secrets
+  # NOTE: Key renamed git → gitlab to match host_role: gitlab in group_vars/gitlab_vms/vars.yml
+  gitlab:
+    gitlab-db-password: '{{ vault_secrets.gitlab.db_password | default(lookup("password", "/dev/null length=32 chars=ascii_letters,digits")) }}'
+    gitlab-root-password: '{{ vault_secrets.gitlab.root_password | default("ChangeMeNow123!") }}'
+    gitlab-db-secret: '{{ vault_secrets.gitlab.db_secret | default(lookup("password", "/dev/null length=32 chars=ascii_letters,digits")) }}'
+    gitlab-secret: '{{ vault_secrets.gitlab.secret_key_base | default(lookup("password", "/dev/null length=64 chars=ascii_letters,digits")) }}'
+    gitlab-otp: '{{ vault_secrets.gitlab.otp_key_base | default(lookup("password", "/dev/null length=64 chars=ascii_letters,digits")) }}'
+    gitlab-jws: '{{ vault_secrets.gitlab.jws_private_key | default(lookup("password", "/dev/null length=64 chars=ascii_letters,digits")) }}'
+    gitlab-ar-primary: '{{ vault_secrets.gitlab.ar_primary_key | default(lookup("password", "/dev/null length=32 chars=ascii_letters,digits")) }}'
+    gitlab-ar-deterministic: '{{ vault_secrets.gitlab.ar_deterministic_key | default(lookup("password", "/dev/null length=32 chars=ascii_letters,digits")) }}'
+    gitlab-ar-salt: '{{ vault_secrets.gitlab.ar_salt | default(lookup("password", "/dev/null length=16 chars=ascii_letters,digits")) }}'
+    gitlab-runner-token: '{{ vault_secrets.gitlab.runner_token | default("") }}'
+    restic-password: '{{ vault_secrets.restic.password | default(lookup("password", "/dev/null length=32 chars=ascii_letters,digits")) }}'
+    restic-env: '{{ vault_secrets.restic.env | default("# No S3 credentials configured") }}'
+
+  # Admin/jumphost secrets
+  admin:
+    ssh-admin-key: '{{ vault_secrets.ssh.admin_private_key | default("") }}'
+    ssh-admin-key-pub: '{{ vault_secrets.ssh.admin_public_key | default("") }}'
+    ssh-ca-private-key: '{{ vault_secrets.ssh_ca.private_key | default("") }}'
+    ssh-ca-public-key: '{{ vault_secrets.ssh_ca.public_key | default("") }}'
+    restic-password: '{{ vault_secrets.restic.password | default(lookup("password", "/dev/null length=32 chars=ascii_letters,digits")) }}'
+    restic-env: '{{ vault_secrets.restic.env | default("# No S3 credentials configured") }}'
+
+  # Docker VM secrets
+  docker:
+    restic-password: '{{ vault_secrets.restic.password | default(lookup("password", "/dev/null length=32 chars=ascii_letters,digits")) }}'
+    restic-env: '{{ vault_secrets.restic.env | default("# No S3 credentials configured") }}'
+    docker-registry-auth: '{{ vault_secrets.docker.registry_auth | default("") }}'
+
+  # Service VM secrets (generic — used when host_role is unset or "service")
+  service:
+    restic-password: '{{ vault_secrets.restic.password | default(lookup("password", "/dev/null length=32 chars=ascii_letters,digits")) }}'
+    restic-env: '{{ vault_secrets.restic.env | default("# No S3 credentials configured") }}'
+    postgres-password: '{{ vault_secrets.postgres.password | default(lookup("password", "/dev/null length=32 chars=ascii_letters,digits")) }}'
+    grafana-admin-password: '{{ vault_secrets.grafana.admin_password | default(lookup("password", "/dev/null length=24 chars=ascii_letters,digits")) }}'
+
+
+
+
+# ===============================================
+# Repository Settings
+# ===============================================
+global_iac_root: "{{ project_root }}/repos"
+global_iac_blueprint_dir: "{{ global_iac_root }}/.blueprints"
+global_iac_terraform_dir: "{{ global_iac_root }}/terraform"
+
+# NixOS Flake Repository
+global_gitlab_flake_repo_namespace: "{{ project_name }}"
+global_gitlab_flake_repo_name: "nix-vms"
+
+# Remote URL (used by VMs pulling configs from GitLab after bootstrap)
+# NOTE (L-4): The "git." prefix assumes GitLab hostname starts with "git".
+# If hostname changes, consider introducing a global_gitlab_hostname variable.
+nixos_flake_repo: "git+https://git.{{ global_domain }}/{{ global_gitlab_flake_repo_namespace }}/{{ global_gitlab_flake_repo_name }}.git"
+# Local flake repo path on the {{ global_service_user }} controller
+nix_flake_repo_path: "{{ global_iac_root }}/repos/nix-vms"
+# Default branch
+nixos_flake_branch: "main"
+
+# ===============================================
+# Kubernetes Cluster Configuration
+# ===============================================
+global_talos_cluster:
+  enabled: true
+  cluster_name: "k8s-prod-01"
+
+  cluster_endpoint: "https://10.90.0.100:6443"
+
+  kubernetes_version: "v1.32.0"
+  bootstrap_mode: "bootstrap"
+
+  controlplane_count: 1
+  worker_count: 0
+  allow_scheduling_on_controlplane: true
+
+  target_node: "pve04"
+  target_nodes: []
+  subnet_key: "main"
+  cidr: "10.90.0.0/16"
+  ip_gateway: "10.10.100.1"
+  ip_dns:
+    - "10.10.100.1"
+
+    - "1.1.1.1"
+
+  talos_version: "v1.12.0"
+  talos_arch: "amd64"
+  iso_file: "local:iso/talos-amd64.iso"
+  iso_storage: "local"
+  download_iso: true
+  iso_download_path: "/tmp"
+  disk_storage: "local-lvm"
+  talos_extensions:
+    - name: "siderolabs/qemu-guest-agent"
+      version: "v1.12.0"
+    - name: "siderolabs/iscsi-tools"
+      version: "v0.1.6"
+    - name: "siderolabs/util-linux-tools"
+      version: "2.40.2"
+
+  # Networking
+  cni: "none" # Options: "calico", "flannel", "canal", "none" - none means you'll set up CNI yourself after cluster creation e.g. Cillium with FluxCD
+  vip:
+    enabled: True
+    ip: "10.90.0.100"
+    interface: "ens18"
+
+  metallb:
+    enabled: false
+    address_pool: "10.90.1.0/24"
+
+  # Node specs
+  controlplane:
+    name_prefix: "cp"
+    cores: 2
+    memory: 4096
+    disk_size: "20G"
+    ip_start: "10.90.5.100"
+    mac_prefix: "AA:BB:CC:DD:01:"
+    target_nodes: []
+  worker:
+    name_prefix: "worker"
+    cores: 4
+    memory: 8192
+    disk_size: "50G"
+    ip_start: "10.90.10.100"
+    mac_prefix: "AA:BB:CC:DD:02:"
+    target_nodes: []
+
+  # FluxCD GitOps
+  fluxcd:
+    enabled: True
+    git_repo: ""
+    git_branch: "main"
+    git_path: "clusters/dev"
+    git_insecure: True
+
+  # Artifact storage
+  artifacts:
+    output_dir: "../config/k8s/talos"
+    kubeconfig_path: "../config/k8s/talos/kubeconfig"
+    talosconfig_path: "../config/k8s/talos/talosconfig"
+    sops_encrypt: True
+
+
+

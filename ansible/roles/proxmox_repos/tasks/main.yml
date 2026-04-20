@@ -1,0 +1,33 @@
+---
+- name: Download Proxmox archive keyring (used for both enterprise and no-subscription)
+  ansible.builtin.get_url:
+    url: 'https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg'
+    dest: '/usr/share/keyrings/proxmox-archive-keyring.gpg'
+    mode: '0644'
+  become: true
+
+- name: Add Proxmox VE 9 no-subscription repository source list
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/proxmox.sources
+    content: |
+      Types: deb
+      URIs: http://download.proxmox.com/debian/pve
+      Suites: trixie
+      Components: pve-no-subscription
+      Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    mode: '0644'
+  become: true
+
+- name: Remove old enterprise or other repo list files
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/pve-enterprise.sources
+    - /etc/apt/sources.list.d/ceph.sources
+  become: true
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+  become: true

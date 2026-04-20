@@ -1,0 +1,68 @@
+---
+# defaults file for sops_age role
+
+# ==============================================
+# Controller/Localhost SOPS Settings
+# ==============================================
+
+# SOPS/age settings for NixOS
+sops_age_key_path: "{{ global_sops_key_path | default('/var/local/{{ project_name }}/sops/age/keys.txt') }}"
+sops_age_sops_dir: '/var/local/{{ project_name }}/sops/age'
+
+# Secrets file (SOPS encrypted)
+sops_age_secrets_file: '{{ global_iac_root }}/config/secrets/secrets.sops.yaml'
+
+# SOPS configuration
+sops_age_sops_config: '{{ global_iac_root }}/.sops.yaml'
+
+# Whether to create default SOPS config
+sops_age_create_sops_config: true
+
+# Default recipients for SOPS encryption (populated from age key)
+sops_age_recipients: []
+
+# ==============================================
+# Remote Host SOPS Settings
+# ==============================================
+
+# Enable SOPS on remote hosts (set in host_vars)
+sops_age_remote_enable: '{{ host_sops_enable | default(false) }}'
+
+# Path to age key on remote NixOS hosts
+sops_age_remote_key_file: '/var/lib/sops-nix/key.txt'
+
+# Whether to create .sops.yaml on remote hosts
+sops_age_create_remote_sops_config: true
+
+# Default secrets file path on remote hosts
+sops_age_remote_secrets_file: '/etc/nixos/secrets/secrets.yaml'
+
+# ==============================================
+# Admin Key & Host Key Management
+# ==============================================
+
+# Admin public key (for encrypting secrets from workstation)
+sops_age_admin_public_key: '{{ global_sops_admin_age_key | default("") }}'
+
+# Path to the flake repository where .sops.yaml and secrets live
+# Derived from nix_flake_repo_path (set in group_vars/all.yml)
+sops_age_flake_repo_path: '{{ nix_flake_repo_path }}'
+
+# Dictionary of all managed host age keys (populated from runtime_secrets.sops.yaml)
+# Format: { 'hostname': { 'private_key': 'AGE-SECRET-KEY-...', 'public_key': 'age1...' }, ... }
+sops_managed_host_keys: '{{ global_sops_host_keys | default({}) }}'
+
+# ==============================================
+# Host-Specific Secrets Generation
+# ==============================================
+
+# Generate and deploy per-host secrets.yaml from vault_secrets (SOPS-sourced)
+sops_age_generate_host_secrets: true
+
+# Secrets mapping by host role — data moved to inventory group_vars/all/sops_secrets.yml
+# Override in inventory to define which vault_secrets keys map to which SOPS secret names
+sops_age_secrets_by_role: {}
+
+# Override secrets for specific hosts (merged with role secrets)
+# Set in host_vars to add or override specific secrets
+sops_age_host_secrets: {}

@@ -1,0 +1,12 @@
+---
+# Handlers for ssh_ca role
+
+- name: backup_ssh_ca_key
+  ansible.builtin.copy:
+    src: '{{ ssh_ca_dir }}/{{ ssh_ca_key_name }}'
+    dest: '{{ ssh_ca_dir }}/{{ ssh_ca_key_name }}.backup-{{ ansible_date_time.epoch }}'
+    mode: '0600'
+    owner: root
+    group: root
+    remote_src: true
+  listen: backup_ssh_ca

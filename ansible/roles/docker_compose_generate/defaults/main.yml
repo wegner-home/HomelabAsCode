@@ -1,0 +1,34 @@
+---
+# defaults file for docker_compose_generate role
+# Generates a Docker Compose repository from inventory via the blueprint_repo role.
+#
+# Blueprint source:  blueprints/docker-compose/  (templates + static files)
+# Blueprint output:  repos/docker-compose/       (rendered git repo)
+#
+# Prerequisites (set by inventory_builder / inventory_loader):
+#   inventory_builder_all_vms   — dict of all NixOS VM definitions
+#   inventory_builder_env       — environment name (dev, dev-test, …)
+#   inventory_builder_project_owner / _group — file ownership
+
+# ===============================================
+# Docker Compose Repository Settings
+# ===============================================
+# Normalized repo root (shared contract with inventory_builder/inventory_loader)
+# Falls back to playbook-relative root when global_iac_root is unset/empty.
+inventory_builder_repo_root: >-
+  {{ (global_iac_root | default(playbook_dir ~ '/..', true))
+     | regex_replace('/+$', '')
+     | regex_replace('/ansible$', '') }}
+
+# Blueprint source directory for Docker Compose repo
+inventory_builder_docker_blueprint_dir: "{{ inventory_builder_repo_root }}/.blueprints/docker-compose"
+
+# Output directory for rendered docker-compose repo
+inventory_builder_docker_repo_output_dir: "{{ inventory_builder_repo_root }}/repos/docker-compose"
+
+# Generate docker compose repo structure
+inventory_builder_generate_docker_compose: true
+
+# Default compose base directory on target hosts (used in CI pipeline)
+# Per-host override: set docker_compose_base_dir in host_vars
+inventory_builder_docker_compose_default_base_dir: "/opt/docker-compose"

@@ -1,0 +1,95 @@
+---
+# Transfer local image file to Proxmox node
+
+- name: Set image path based on source type
+  ansible.builtin.set_fact:
+    proxmox_template_local_image_path: "{{ proxmox_template_nixos_build_dir ~ '/nixos-' ~ proxmox_template_nixos_version ~ '.' ~ proxmox_template_image_format if proxmox_template_source_type == 'nixos_build' else proxmox_template_image_file }}"
+
+- name: Detect actual image file on localhost (for NixOS builds)
+  ansible.builtin.find:
+    paths: '{{ proxmox_template_nixos_build_dir }}'
+    patterns: 'nixos-{{ proxmox_template_nixos_version }}.*'
+  delegate_to: localhost
+  register: found_images
+  when: proxmox_template_source_type == 'nixos_build'
+
+- name: Set image paths from found files (NixOS build)
+  ansible.builtin.set_fact:
+    proxmox_template_local_image_path: '{{ found_images.files[0].path }}'
+    proxmox_template_image_format: "{{ found_images.files[0].path | basename | regex_replace('.*\\.', '') }}"
+  when:
+    - proxmox_template_source_type == 'nixos_build'
+    - found_images.files | length > 0
+
+- name: Set remote image path
+  ansible.builtin.set_fact:
+    proxmox_template_image_filename: '{{ proxmox_template_local_image_path | basename }}'
+    proxmox_template_remote_image_path: '{{ proxmox_template_tmp_dir }}/{{ proxmox_template_local_image_path | basename }}'
+
+- name: Check if image exists on localhost
+  ansible.builtin.stat:
+    path: '{{ proxmox_template_local_image_path }}'
+  delegate_to: localhost
+  register: local_image
+
+- name: Fail if image does not exist
+  ansible.builtin.fail:
+    msg: |
+      Image not found: {{ proxmox_template_local_image_path }}
+      {% if proxmox_template_source_type == 'nixos_build' %}
+      Run with --tags build to build the NixOS image first.
+      {% else %}
+      Please ensure the image file exists at the specified path.
+      {% endif %}
+  when: not local_image.stat.exists
+
+- name: Check if image already exists on Proxmox node
+  ansible.builtin.stat:
+    path: '{{ proxmox_template_remote_image_path }}'
+  register: remote_image
+
+- name: Transfer image to Proxmox node
+  when: not remote_image.stat.exists or proxmox_template_force_rebuild | bool
+  block:
+    - name: Compress image for transfer
+      ansible.builtin.command: >
+        gzip -c {{ proxmox_template_local_image_path }} > {{ proxmox_template_local_image_path }}.gz
+      args:
+        creates: '{{ proxmox_template_local_image_path }}.gz'
+      delegate_to: localhost
+      when: proxmox_template_compress_transfer | bool
+
+    - name: Copy compressed image to Proxmox node
+      ansible.builtin.copy:
+        src: '{{ proxmox_template_local_image_path }}.gz'
+        dest: '{{ proxmox_template_remote_image_path }}.gz'
+        mode: '0644'
+      become: true
+      when: proxmox_template_compress_transfer | bool
+
+    - name: Decompress image on Proxmox node
+      ansible.builtin.command: >
+        gunzip -f {{ proxmox_template_remote_image_path }}.gz
+      when: proxmox_template_compress_transfer | bool
+      changed_when: true
+      become: true
+
+    - name: Copy uncompressed image to Proxmox node
+      ansible.builtin.copy:
+        src: '{{ proxmox_template_local_image_path }}'
+        dest: '{{ proxmox_template_remote_image_path }}'
+        mode: '0644'
+      become: true
+      when: not proxmox_template_compress_transfer | bool
+
+- name: Verify image on Proxmox node
+  ansible.builtin.stat:
+    path: '{{ proxmox_template_remote_image_path }}'
+  register: transferred_image
+
+- name: Display transfer result
+  ansible.builtin.debug:
+    msg:
+      - 'Image ready on Proxmox node'
+      - 'Remote path: {{ proxmox_template_remote_image_path }}'
+      - 'Size: {{ (transferred_image.stat.size / 1024 / 1024) | round(2) }} MB'

@@ -1,0 +1,55 @@
+---
+# Group variables for common VMs
+deploy_monitoring: true
+deploy_backup: true
+deploy_ci_runner: true
+
+# Override: restic_repository from SOPS secrets
+restic_repository: '{{ (lookup("community.sops.sops", global_sops_secrets_file, output_type="json") | from_json).vault_secrets.restic.repository | default(global_backup_repository) }}'
+restic_password: '{{ (lookup("community.sops.sops", global_sops_secrets_file, output_type="json") | from_json).vault_secrets.restic.password }}'
+restic_s3_access_key: '{{ (lookup("community.sops.sops", global_sops_secrets_file, output_type="json") | from_json).vault_secrets.restic.s3_access_key | default('''') }}'
+restic_s3_secret_key: '{{ (lookup("community.sops.sops", global_sops_secrets_file, output_type="json") | from_json).vault_secrets.restic.s3_secret_key | default('''') }}'
+restic_backup_paths_common:
+  - /etc/nixos
+  - /var/lib
+  - /root/.config
+
+prometheus_scrape_interval: "15s"
+prometheus_scrape_timeout: "10s"
+
+gitlab_runner_enable: true
+gitlab_runner_url: '{{ (lookup("community.sops.sops", global_sops_secrets_file, output_type="json") | from_json).vault_secrets.gitlab.url | default(''https://gitlab.{{ global_domain }}'') }}'
+gitlab_runner_executor: "shell"
+gitlab_runner_concurrent: 2
+gitlab_runner_docker_image: "docker:latest"
+gitlab_runner_docker_privileged: false
+gitlab_runner_docker_volumes:
+  - "/cache"
+gitlab_runner_tags_common:
+  - "nixos"
+  - "{{ project_name }}"
+  - "service-vm"
+
+host_flakes_default:
+  - name: "base-system"
+    url: "github:yourgithub/nixos-base"
+    ref: "main"
+    description: "Base NixOS configuration"
+  - name: "monitoring"
+    url: "github:yourgithub/monitoring"
+    ref: "main"
+    description: "Node Exporter and monitoring stack"
+  - name: "backup"
+    url: "github:yourgithub/backup"
+    ref: "main"
+    description: "Restic backup configuration"
+  - name: "ci-runner"
+    url: "github:yourgithub/ci"
+    ref: "main"
+    description: "GitLab Runner integration"
+
+common_vm_firewall_allowed_tcp_ports:
+  - 22
+  - 9100
+# NOTE: system_timezone, system_locale, system_keymap, enable_debug_logging,
+#       test_mode centralized in group_vars/all/system.yml

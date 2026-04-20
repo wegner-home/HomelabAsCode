@@ -1,0 +1,14 @@
+---
+# Defaults for proxmox_vm_snippets role
+# ====================================================================
+# Scans inventory host_vars for global_vm_definitions and generates
+# per-VM cloud-init userdata snippets on each Proxmox node.
+
+# Whether to run snippet generation (guard clause for composability)
+proxmox_template_generate_vm_snippets: false
+
+# Path to inventory host_vars directory
+proxmox_template_hostvars_path: '{{ playbook_dir }}/inventory/{{ inventory_builder_env | default(lookup("env", "NIX_ENV") | default("dev", true)) }}/host_vars/'
+
+# Directory on Proxmox nodes where snippets are stored
+proxmox_template_snippet_dir: '/var/lib/vz/snippets'

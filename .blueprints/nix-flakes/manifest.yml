@@ -1,0 +1,63 @@
+# Blueprint Manifest Schema
+# =========================
+# This file defines how a blueprint repository is generated.
+#
+# Required fields:
+#   name        - Human-readable blueprint name
+#   version     - Semantic version
+#
+# Optional fields:
+#   description - What this blueprint generates
+#   required_vars - Variables that must be provided by caller
+#   directories - Directories to create in output
+#   static      - Configuration for static file sync
+#   templates   - List of template files (auto-discovered if omitted)
+#   hooks       - Pre/post generation task files
+
+name: "nix-flakes"
+description: "NixOS Flake configurations for VM hosts"
+version: "1.0"
+
+# Variables that must be provided
+required_vars:
+  - blueprint_hosts # Dict of hostname → config
+  - global_domain # Domain for FQDN construction
+
+# Directories to create (in addition to per-host dirs)
+directories:
+  - "hosts"
+  - "modules"
+  - "profiles"
+  - "secrets"
+
+# Static files configuration
+static:
+  # 'ignore-existing' - only copy if file doesn't exist (default)
+  # 'overwrite' - always copy (destructive!)
+  # 'skip' - don't sync static files at all
+  sync_mode: "ignore-existing"
+  exclude:
+    - ".git"
+    - "flake.lock"
+    - "result"
+    - "*.bak"
+
+# Template files
+# Templates are auto-discovered from templates/ directory.
+# The _host_ pattern in paths triggers per-host expansion.
+# The _env_ pattern is replaced with the environment name.
+#
+# Exclude role templates from auto-discovery — the post-generate hook
+# renders only the correct role per host (based on nixos_template).
+template_excludes:
+  - "admin.nix.j2"
+  - "docker.nix.j2"
+  - "gitlab.nix.j2"
+
+# Hooks (optional)
+hooks:
+  # Run before template rendering
+  # pre_generate: 'hooks/pre.yml'
+
+  # Run after template rendering (e.g., for nixos_role-specific generation)
+  post_generate: "hooks/post.yml"

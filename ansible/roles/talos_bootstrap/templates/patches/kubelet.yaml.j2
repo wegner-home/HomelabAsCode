@@ -1,0 +1,12 @@
+# Kubelet patch — applied to ALL nodes
+# Enables graceful shutdown configuration.
+# NOTE: Do NOT set rotate-server-certificates here — Talos v1.12+ manages
+# kubelet serving certificates natively. Enabling Kubernetes CSR rotation
+# creates a deadlock: kubelet needs controller-manager to approve the CSR,
+# but controller-manager (a static pod) needs the kubelet API, which rejects
+# connections without a valid serving cert.
+machine:
+  kubelet:
+    extraConfig:
+      shutdownGracePeriod: 30s
+      shutdownGracePeriodCriticalPods: 10s

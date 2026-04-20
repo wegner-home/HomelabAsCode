@@ -1,0 +1,67 @@
+---
+# Host vars for docker-01
+
+# ===============================================
+# VM Infrastructure Definition (for Terraform)
+# ===============================================
+global_nixos_vm_definitions:
+  docker-01:
+    target_node: "pve01"
+    clone_template: "nixos-cloud-init-tmpl"
+    cores: 1
+    memory: 4096
+
+    nixos_template: "docker-vm"
+    nixos_profile: "server"
+
+    nixos_modules:
+      - monitoring
+      - backup
+      - ci-runner
+
+    nixos_role: docker
+
+    ip_address: "10.80.1.10"
+    mac_address: "BC:24:11:00:01:07"
+    cidr: 8
+    subnet_key: "main"
+    bridge: "vmbr0"
+
+    hostname: "docker-01"
+    dns_hostnames:
+      - "docker-01"
+      - "docker"
+
+    ciuser: "ansible"
+    boot_disk_type: "virtio"
+    description: "NixOS Docker Host - Containerized services, cAdvisor, Compose"
+
+    tags:
+      - nixos
+      - docker
+      - stage-4
+
+    onboot: True
+    dns_enabled: True
+    dhcp_enabled: True
+
+# ===============================================
+# NixOS Flakes Configuration
+# ===============================================
+nixos_flake_deploy_from_repo: true
+
+host_flakes:
+  - name: "docker-01"
+    deploy_from_repo: true
+    description: "docker VM NixOS configuration from GitLab repo"
+
+# ===============================================
+# GitLab Runner
+# ===============================================
+gitlab_runner_enable: false
+# ===============================================
+# Firewall Configuration
+# ===============================================
+nixos_firewall_allowed_tcp_ports:
+  - 22
+  - 9100

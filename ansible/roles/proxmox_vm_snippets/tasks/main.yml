@@ -1,0 +1,43 @@
+---
+# Generate cloud-init snippets for VMs from inventory
+
+- name: Find all host_vars files in the inventory
+  ansible.builtin.find:
+    paths: '{{ proxmox_template_hostvars_path }}'
+    patterns: '*.yml'
+  register: host_vars_files
+  delegate_to: localhost
+  run_once: true
+
+- name: Initialize an empty dictionary for VM definitions
+  ansible.builtin.set_fact:
+    proxmox_template_vms: {}
+  run_once: true
+
+- name: Load and aggregate vm_definition from each host_vars file
+  ansible.builtin.set_fact:
+    proxmox_template_vms: "{{ proxmox_template_vms | combine(lookup('file', item.path) | from_yaml | json_query('global_vm_definitions') | default({})) }}"
+  loop: '{{ host_vars_files.files }}'
+  when: (lookup('file', item.path) | from_yaml).global_vm_definitions is defined
+  run_once: true
+
+- name: Display found VM definitions
+  ansible.builtin.debug:
+    msg: 'Found {{ proxmox_template_vms | length }} VM definitions'
+  run_once: true
+
+- name: Create user-data snippet for each VM
+  ansible.builtin.template:
+    src: 'vm_userdata.yml.j2'
+    dest: '{{ proxmox_template_snippet_dir }}/{{ item.key }}-cloud-config.yml'
+    mode: '0644'
+  loop: '{{ proxmox_template_vms | dict2items }}'
+  loop_control:
+    loop_var: item
+  become: true
+  when: proxmox_template_vms | length > 0
+
+- name: Display snippet generation result
+  ansible.builtin.debug:
+    msg: 'Generated {{ proxmox_template_vms | length }} VM cloud-init snippets'
+  run_once: true

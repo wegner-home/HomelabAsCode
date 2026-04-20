@@ -1,0 +1,8 @@
+---
+# Handlers for ssh_user role
+
+- name: Restart sshd
+  become: true
+  ansible.builtin.systemd:
+    name: sshd
+    state: restarted

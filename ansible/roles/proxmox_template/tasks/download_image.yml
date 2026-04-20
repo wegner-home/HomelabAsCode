@@ -1,0 +1,29 @@
+---
+# Download cloud image from URL to Proxmox node
+
+- name: Set image filename from URL
+  ansible.builtin.set_fact:
+    proxmox_template_image_filename: '{{ proxmox_template_image_url | basename }}'
+    proxmox_template_remote_image_path: '{{ proxmox_template_tmp_dir }}/{{ proxmox_template_image_url | basename }}'
+
+- name: Check if image already exists on Proxmox node
+  ansible.builtin.stat:
+    path: '{{ proxmox_template_remote_image_path }}'
+  register: remote_image_stat
+
+- name: Download cloud image to Proxmox node
+  ansible.builtin.get_url:
+    url: '{{ proxmox_template_image_url }}'
+    dest: '{{ proxmox_template_remote_image_path }}'
+    mode: '0644'
+    timeout: 300
+  when: not remote_image_stat.stat.exists or proxmox_template_force_rebuild | bool
+  become: true
+  register: image_download
+
+- name: Display download result
+  ansible.builtin.debug:
+    msg:
+      - 'Cloud image ready on Proxmox node'
+      - 'Path: {{ proxmox_template_remote_image_path }}'
+      - "Status: {{ 'Downloaded' if image_download.changed | default(false) else 'Already exists' }}"

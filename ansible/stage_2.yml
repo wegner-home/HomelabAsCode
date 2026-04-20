@@ -1,0 +1,36 @@
+---
+# Stage 2: Generate Templates
+# Generates Terraform .tfvars, NixOS flakes, Docker Compose, and K8s
+# manifests from Ansible inventory. Does NOT apply Terraform — that is
+# Stage 3 (manual: cd terraform/ && terraform plan && terraform apply).
+
+- name: Stage 2 - Generate Templates
+  hosts: localhost
+  gather_facts: true
+  become: false
+  tags:
+    - stage_2
+    - generate
+    - templates
+
+  pre_tasks:
+    - name: Load and merge vault secrets
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/helpers/load_vaults.yml"
+
+  vars:
+    # Generate both NixOS VM and Talos K8s tfvars in this stage
+    inventory_builder_generate_talos: true
+    # Generate FluxCD GitOps repository for Kubernetes
+    inventory_builder_generate_k8s_repo: true
+
+  tasks:
+    - name: Display stage information
+      ansible.builtin.debug:
+        msg: "Starting Stage 2: Generate Templates (Terraform tfvars, NixOS flakes, Docker Compose, K8s)"
+
+    - name: Generate Terraform variables from inventory
+      ansible.builtin.import_role:
+        name: inventory_builder
+      tags:
+        - tf_build_inv

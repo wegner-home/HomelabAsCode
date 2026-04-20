@@ -1,0 +1,24 @@
+---
+# Run: ansible-lint
+# Docs: https://ansible.readthedocs.io/projects/lint/configuring/
+
+# Profile: moderate catches common issues without being overly strict
+profile: moderate
+exclude_paths:
+  - collections/
+
+# Specific rule overrides
+skip_list:
+  - command-instead-of-module # [command-instead-of-shell]
+  - no-changed-when # Many shell tasks are idempotent by design
+  - yaml[truthy]
+
+# Warn but don't fail on these
+warn_list:
+  - name[missing] # Some internal tasks skip naming
+  - var-naming[no-role-prefix] # Global vars use global_ prefix, not role prefix
+
+# Enable offline mode (don't fetch galaxy deps during lint)
+offline: true
+# Colored output
+use_default_rules: true

@@ -1,0 +1,123 @@
+---
+# Defaults for proxmox_template role (orchestrator)
+# ====================================================================
+# Orchestrates: nixos_image_build, proxmox_vm_snippets
+#
+# Most user-configurable settings live in group_vars/proxmox_nodes/.
+# This file contains internal role mechanics and safe fallbacks.
+# NixOS build vars are in nixos_image_build/defaults/main.yml.
+# VM snippet vars are in proxmox_vm_snippets/defaults/main.yml.
+
+# ==============================================
+# Image Source Configuration (internal)
+# ==============================================
+
+# Source type fallback (normally set in group_vars/proxmox_nodes/)
+proxmox_template_source_type: 'nixos_build'
+
+# URL source — only used when source_type: 'url' (not the default).
+# This project uses nixos_build exclusively. The Ubuntu URL below is a
+# working example kept for reference / quick testing of URL mode.
+# Override in group_vars or extra-vars if you need a different image.
+proxmox_template_image_url: 'https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img'
+
+# Local file source
+proxmox_template_image_file: ''
+
+# Image format
+proxmox_template_image_format: 'qcow2'
+
+# ==============================================
+# NixOS Build (shared with nixos_image_build child role)
+# ==============================================
+# Full NixOS build config lives in nixos_image_build/defaults/main.yml.
+# These vars are kept here because cleanup.yml and transfer_image.yml
+# reference them in the parent role's own tasks.
+
+# Build directory on localhost (also used by cleanup + transfer)
+proxmox_template_nixos_build_dir: '/tmp/nixos-template-build'
+
+# ==============================================
+# Proxmox API Settings (derived from inventory)
+# ==============================================
+proxmox_template_node: '{{ inventory_hostname }}'
+proxmox_template_api_host: '{{ ansible_host | default(inventory_hostname) }}'
+proxmox_template_api_user: 'ansible@pve'
+proxmox_template_api_token_id: 'bootstrap'
+proxmox_template_api_token_secret: '{{ vault_secrets.proxmox[proxmox_template_node].ansible_token_secret | default("") }}'
+
+# ==============================================
+# Template VM Fallbacks
+# ==============================================
+# These provide safe fallbacks; normally overridden by group_vars/proxmox_nodes/
+# VM ID is offset per-node to avoid conflicts in a cluster (9000, 9001, 9002, ...)
+proxmox_template_vm_id_base: 9000
+proxmox_template_vm_id: >-
+  {{ proxmox_template_vm_id_base | int +
+     (groups['proxmox_nodes'] | default([inventory_hostname]) | sort).index(inventory_hostname) }}
+proxmox_template_name: 'nixos-cloud-init-tmpl'
+proxmox_template_description: 'NixOS Cloud-Init Template for {{ project_name }} VMs'
+proxmox_template_cores: 2
+proxmox_template_sockets: 1
+proxmox_template_cpu_type: 'host'
+proxmox_template_memory: 2048
+proxmox_template_disk_size: 32
+proxmox_template_storage: 'local-lvm'
+proxmox_template_disk_format: 'raw'
+
+# Disk interface — must match boot.loader.grub.device in NixOS config
+proxmox_template_disk_interface: 'virtio0'
+proxmox_template_scsi_controller: 'virtio-scsi-pci'
+proxmox_template_bootdisk: 'virtio0'
+
+# Cloud-init
+proxmox_template_cloudinit_storage: '{{ proxmox_template_storage }}'
+proxmox_template_cloudinit_interface: 'ide2'
+
+# Network
+proxmox_template_bridge: 'vmbr0'
+proxmox_template_network_model: 'virtio'
+proxmox_template_firewall: false
+
+# BIOS
+proxmox_template_bios: 'seabios'
+
+# ==============================================
+# Features & Options
+# ==============================================
+proxmox_template_qemu_agent: true
+proxmox_template_cloudinit_enable: true
+proxmox_template_onboot: false
+proxmox_template_boot_order: 'order=virtio0;ide2'
+proxmox_template_serial_console: true
+
+# ==============================================
+# SSH & Security (role-internal)
+# ==============================================
+proxmox_template_ssh_ca_pubkey: ''
+proxmox_template_ssh_ca_path: '/etc/ssh/trusted-user-ca-keys.pem'
+proxmox_template_ssh_enable: true
+proxmox_template_root_no_password: true
+proxmox_template_ansible_user: '{{ global_service_user | default("ansible") }}'
+
+# ==============================================
+# Cloud-init Snippets (role-internal)
+# ==============================================
+proxmox_template_snippet_dir: '/var/lib/vz/snippets'
+proxmox_template_userdata_template: 'template_userdata.yml.j2'
+proxmox_template_deploy_snippet: true
+
+# ==============================================
+# Build & Transfer Options (role-internal)
+# ==============================================
+proxmox_template_force_rebuild: false
+proxmox_template_cleanup: true
+proxmox_template_keep_local_image: false
+proxmox_template_compress_transfer: false
+proxmox_template_tmp_dir: '/tmp'
+
+# ==============================================
+# VM Snippets Generation (guard for orchestrator)
+# ==============================================
+# Full snippet config lives in proxmox_vm_snippets/defaults/main.yml.
+proxmox_template_generate_vm_snippets: false

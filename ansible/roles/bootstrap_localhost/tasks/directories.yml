@@ -1,0 +1,11 @@
+---
+# Directory setup tasks for bootstrap_localhost
+
+- name: Ensure required directories exist
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    mode: '0755'
+  loop: '{{ bootstrap_localhost_common_dirs }}'
+  tags:
+    - directories

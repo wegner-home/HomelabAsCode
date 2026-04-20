@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: phil
+  description: >-
+    Generates a Docker Compose repository from Ansible inventory using the
+    blueprint_repo role. Filters hosts with nixos_role=docker, renders
+    per-host directories with README, .gitignore, and GitLab CI pipeline
+    via the blueprints/docker-compose/ blueprint.
+  license: MIT
+  min_ansible_version: '2.14'
+
+dependencies: []

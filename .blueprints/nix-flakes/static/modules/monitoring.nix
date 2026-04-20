@@ -1,0 +1,155 @@
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+
+with lib;
+
+{
+  options.iac.monitoring = {
+    enable = mkEnableOption "Prometheus Node Exporter monitoring";
+
+    port = mkOption {
+      type = types.port;
+      default = 9100;
+      description = "Port for Node Exporter to listen on";
+    };
+
+    listenAddress = mkOption {
+      type = types.str;
+      default = "0.0.0.0";
+      description = "Address for Node Exporter to listen on";
+    };
+
+    enabledCollectors = mkOption {
+      type = types.listOf types.str;
+      default = [
+        "systemd"
+        "filesystem"
+        "netdev"
+        "netstat"
+        "meminfo"
+        "cpu"
+        "diskstats"
+        "loadavg"
+        "vmstat"
+      ];
+      description = "List of enabled collectors";
+    };
+
+    disabledCollectors = mkOption {
+      type = types.listOf types.str;
+      default = [
+        "arp"
+        "textfile"
+      ];
+      description = "List of disabled collectors";
+    };
+
+    openFirewall = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Open firewall port for Node Exporter";
+    };
+  };
+
+  config = mkIf config.iac.monitoring.enable {
+    # Prometheus Node Exporter
+    services.prometheus.exporters.node = {
+      enable = true;
+      port = config.iac.monitoring.port;
+      listenAddress = config.iac.monitoring.listenAddress;
+
+      enabledCollectors = config.iac.monitoring.enabledCollectors;
+      disabledCollectors = config.iac.monitoring.disabledCollectors;
+
+      # Additional exporter arguments
+      extraFlags = [
+        "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+        "--collector.netdev.device-exclude=^(veth.*|docker.*|br-.*|virbr.*)$$"
+      ];
+    };
+
+    # Firewall configuration
+    networking.firewall.allowedTCPPorts = mkIf config.iac.monitoring.openFirewall [
+      config.iac.monitoring.port
+    ];
+
+    # Systemd service hardening
+    systemd.services.prometheus-node-exporter.serviceConfig = {
+      # Security hardening (DynamicUser handled by upstream module)
+      ProtectHome = true;
+      ProtectSystem = "strict";
+      ProtectKernelTunables = true;
+      ProtectKernelModules = true;
+      ProtectControlGroups = true;
+      PrivateTmp = true;
+      NoNewPrivileges = true;
+
+      # Allow reading system information
+      ReadOnlyPaths = [
+        "/sys"
+        "/proc"
+      ];
+
+      # Restrict capabilities
+      CapabilityBoundingSet = "";
+
+      # Restrict syscalls
+      SystemCallFilter = [
+        "@system-service"
+        "~@privileged"
+      ];
+    };
+
+    # Health check script
+    environment.systemPackages = [
+      (pkgs.writeScriptBin "check-node-exporter" ''
+        #!${pkgs.bash}/bin/bash
+        set -euo pipefail
+
+        PORT="${toString config.iac.monitoring.port}"
+
+        echo "Checking Node Exporter on port $PORT..."
+
+        # Check if service is running
+        if systemctl is-active prometheus-node-exporter.service &>/dev/null; then
+          echo "✓ Service is running"
+        else
+          echo "✗ Service is not running"
+          exit 1
+        fi
+
+        # Check if metrics endpoint responds
+        if curl -s "http://localhost:$PORT/metrics" | grep -q "node_"; then
+          echo "✓ Metrics endpoint is responding"
+        else
+          echo "✗ Metrics endpoint is not responding"
+          exit 1
+        fi
+
+        # Show some sample metrics
+        echo ""
+        echo "Sample metrics:"
+        curl -s "http://localhost:$PORT/metrics" | grep -E "node_cpu_seconds_total|node_memory_MemTotal_bytes|node_filesystem_size_bytes" | head -5
+
+        echo ""
+        echo "✓ Node Exporter is healthy"
+      '')
+    ];
+
+    # Add monitoring user to required groups
+    users.groups.prometheus = { };
+
+    # Documentation in MOTD
+    environment.etc."motd.d/10-monitoring".text = ''
+
+      Prometheus Node Exporter:
+        Status: systemctl status prometheus-node-exporter
+        Metrics: curl http://localhost:${toString config.iac.monitoring.port}/metrics
+        Health Check: check-node-exporter
+    '';
+  };
+}

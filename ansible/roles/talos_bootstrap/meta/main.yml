@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: Bootstraps a Talos Kubernetes cluster — pre-flight checks, secret/config generation, machine config apply, cluster bootstrap, and FluxCD setup
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: GenericLinux
+      versions:
+        - all
+
+dependencies: []

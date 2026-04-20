@@ -1,0 +1,31 @@
+---
+# defaults file for k8s_gitops_generate role
+# Generates a FluxCD GitOps repository from inventory via the blueprint_repo role.
+#
+# Blueprint source:  blueprints/k8s/   (templates + static files)
+# Blueprint output:  repos/k8s/        (rendered git repo)
+#
+# Prerequisites (set by inventory_builder / inventory_loader):
+#   inventory_builder_env            — environment name (dev, dev-test, …)
+#   inventory_builder_project_owner / _group — file ownership
+#   global_talos_cluster            — cluster config from inventory
+#   global_sops_age_public_key      — SOPS age key for secret encryption
+
+# ===============================================
+# K8s GitOps Repository Settings
+# ===============================================
+# Normalized repo root (shared contract with inventory_builder/inventory_loader)
+# Falls back to playbook-relative root when global_iac_root is unset/empty.
+inventory_builder_repo_root: >-
+  {{ (global_iac_root | default(playbook_dir ~ '/..', true))
+     | regex_replace('/+$', '')
+     | regex_replace('/ansible$', '') }}
+
+# Generate FluxCD GitOps repo structure
+inventory_builder_generate_k8s_repo: false
+
+# Blueprint source directory (templates + static files)
+inventory_builder_k8s_blueprint_dir: "{{ inventory_builder_repo_root }}/.blueprints/k8s"
+
+# Output directory for rendered k8s repo
+inventory_builder_k8s_repo_output_dir: "{{ inventory_builder_repo_root }}/repos/k8s"

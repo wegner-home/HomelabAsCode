@@ -1,0 +1,2 @@
+---
+ansible_ssh_password: '{{ lookup(''community.sops.sops'', ''{{ project_root }}/secrets/secrets.sops.yaml'', extract=''["vault_secrets"]["proxmox"]["pve01"]["ssh_password"]'') }}'

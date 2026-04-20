@@ -1,0 +1,169 @@
+---
+# Stage 6: Deploy & Verify NixOS VMs (excludes GitLab — handled in Stage 4)
+#
+# This stage has 3 plays:
+#   Play 0: Pre-connection SSH known_hosts cleanup (localhost)
+#   Play 1: Deploy flakes to all NixOS VMs except GitLab
+#   Play 2: Verify services on each VM (node-exporter, restic, runner)
+#
+# Plays 1 and 2 are independently runnable via tags:
+#   --tags deployment    → deploy only
+#   --tags verify        → verify only (assumes VMs are already deployed)
+#   (no --tags)          → full deploy + verify
+
+# ===============================================
+# Play 0: Pre-connection SSH known_hosts cleanup
+# ===============================================
+# When VMs are rebuilt/reprovisioned they get new SSH host keys.
+# Stale entries in known_hosts cause SSH to reject connections,
+# even with host_key_checking=False. This play removes them
+# using only inventory-defined variables (no remote facts needed).
+- name: Stage 6 - Cleanup stale SSH known_hosts entries
+  hosts: localhost
+  gather_facts: false
+  tags:
+    - stage_6
+    - cleanup
+    - known_hosts
+
+  tasks:
+    - name: Remove stale SSH host keys for target NixOS VMs
+      ansible.builtin.include_tasks:
+        file: '{{ playbook_dir }}/helpers/cleanup_known_hosts.yml'
+      vars:
+        _cleanup_hosts: "{{ groups['nixos_vms'] | default([]) | difference(groups['gitlab_vms'] | default([])) }}"
+
+# ===============================================
+# Play 1: Deploy NixOS Service VMs
+# ===============================================
+- name: Stage 6 - Deploy NixOS Service VMs (excluding GitLab)
+  hosts: 'nixos_vms:!gitlab_vms'
+  gather_facts: false # Disable initial gather - Python may not be installed yet
+  become: true
+  tags:
+    - stage_6
+    - deployment
+    - services
+    - nixos
+
+  pre_tasks:
+    - name: Bootstrap NixOS VM for Ansible
+      ansible.builtin.include_tasks:
+        file: '{{ playbook_dir }}/helpers/nixos_vm_pretasks.yml'
+      tags: ['always']
+
+    - name: Display stage information
+      ansible.builtin.debug:
+        msg:
+          - '================================================'
+          - 'Stage 6: NixOS Service Deployment'
+          - '================================================'
+          - 'Target host: {{ inventory_hostname }}'
+          - 'Host role: {{ host_role | default("generic") }}'
+          - 'Flakes to deploy: {{ host_flakes | default([]) }}'
+          - ''
+          - 'This stage deploys configuration via flakes:'
+          - '  ✓ Base NixOS system configuration'
+          - '  ✓ Node Exporter (Prometheus metrics)'
+          - '  ✓ Restic backup (if enabled)'
+          - '  ✓ GitLab Runner (if enabled)'
+          - '  ✓ Service-specific applications'
+
+    - name: Verify NixOS installation
+      ansible.builtin.command: nixos-version
+      register: nixos_version
+      changed_when: false
+      failed_when: false
+
+    - name: Display NixOS version
+      ansible.builtin.debug:
+        msg: 'Running NixOS {{ nixos_version.stdout }}'
+      when: nixos_version.rc == 0
+
+    - name: Verify host_flakes is defined
+      ansible.builtin.assert:
+        that:
+          - host_flakes is defined
+          - host_flakes | length > 0
+        fail_msg: |
+          No flakes defined for {{ inventory_hostname }}!
+          Add 'host_flakes' list to host_vars/{{ inventory_hostname }}.yml
+          Example:
+            host_flakes:
+              - name: "base"
+                url: "git+https://gitlab.example.com/iax/nix-flakes.git"
+                ref: "main"
+        success_msg: 'Host has {{ host_flakes | length }} flake(s) configured'
+
+  roles:
+    - role: nixos_flake_deploy
+      tags:
+        - nixos
+        - flake
+        - deployment
+        - config
+
+    - role: gitlab_runner
+      when: gitlab_runner_enable | default(false) | bool
+      tags:
+        - runners
+        - gitlab_runner
+
+# ===============================================
+# Play 2: Verify NixOS Service VMs
+# ===============================================
+# Independently runnable: ansible-playbook stage_6.yml --tags verify
+# Checks service health without re-deploying. All checks are read-only.
+- name: Stage 6 - Verify NixOS Service VMs (excluding GitLab)
+  hosts: 'nixos_vms:!gitlab_vms'
+  gather_facts: true
+  become: true
+  tags:
+    - stage_6
+    - verify
+    - services
+
+  tasks:
+    # --- Always-expected service: node exporter ---
+    - name: Verify node exporter is running
+      ansible.builtin.command: systemctl is-active prometheus-node-exporter.service
+      register: node_exporter_check
+      changed_when: false
+      failed_when: false
+
+    # --- Conditional: Restic backup (only if enabled in host_vars) ---
+    - name: Verify Restic backup timer
+      ansible.builtin.command: systemctl is-active restic-backups-daily.timer
+      register: restic_check
+      changed_when: false
+      failed_when: false
+      when: restic_backup_enable | default(false) | bool
+
+    # --- Conditional: GitLab Runner (only if enabled in host_vars) ---
+    - name: Verify GitLab Runner service
+      ansible.builtin.command: systemctl is-active gitlab-runner.service
+      register: runner_check
+      changed_when: false
+      failed_when: false
+      when: gitlab_runner_enable | default(false) | bool
+
+    - name: Test GitLab Runner connectivity
+      ansible.builtin.command: gitlab-runner verify
+      register: runner_verify
+      changed_when: false
+      failed_when: false
+      when: gitlab_runner_enable | default(false) | bool
+
+    - name: Display service verification summary
+      ansible.builtin.debug:
+        msg:
+          - '================================================'
+          - 'Stage 6 — Service Verification: {{ inventory_hostname }}'
+          - '================================================'
+          - 'Host role: {{ host_role | default("generic") }}'
+          - 'NixOS: {{ ansible_distribution_version | default("unknown") }}'
+          - ''
+          - 'Services:'
+          - '  Node Exporter: {{ "✓ Running" if (node_exporter_check.rc is defined and node_exporter_check.rc == 0) else "✗ Not active" }}'
+          - '  Restic Backup: {{ "✓ Running" if (restic_check.rc is defined and restic_check.rc == 0) else ("⊘ Not enabled" if not (restic_backup_enable | default(false) | bool) else "✗ Not active") }}'
+          - '  GitLab Runner: {{ "✓ Running" if (runner_check.rc is defined and runner_check.rc == 0) else ("⊘ Not enabled" if not (gitlab_runner_enable | default(false) | bool) else "✗ Not active") }}'

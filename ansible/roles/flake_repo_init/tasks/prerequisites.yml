@@ -1,0 +1,61 @@
+---
+# Check prerequisites for NixOS flake repository
+
+- name: Check if git is installed
+  ansible.builtin.command: git --version
+  register: git_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail if git is not installed
+  ansible.builtin.fail:
+    msg: 'Git is not installed. Please install git first.'
+  when: git_check.rc != 0
+
+- name: Check if nix is installed
+  ansible.builtin.command: nix --version
+  register: nix_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail if nix is not installed
+  ansible.builtin.fail:
+    msg: 'Nix is not installed. Please install Nix first.'
+  when: nix_check.rc != 0
+
+- name: Check if age is available
+  ansible.builtin.command: age --version
+  register: age_check
+  changed_when: false
+  failed_when: false
+
+- name: Display warning if age is not installed
+  ansible.builtin.debug:
+    msg: |
+      WARNING: age is not installed.
+      It will be needed for secrets encryption.
+      Install with: nix-env -iA nixpkgs.age
+  when: age_check.rc != 0
+
+- name: Check if sops is available
+  ansible.builtin.command: sops --version
+  register: sops_check
+  changed_when: false
+  failed_when: false
+
+- name: Display warning if sops is not installed
+  ansible.builtin.debug:
+    msg: |
+      WARNING: sops is not installed.
+      It will be needed for secrets management.
+      Install with: nix-env -iA nixpkgs.sops
+  when: sops_check.rc != 0
+
+- name: Display prerequisites check results
+  ansible.builtin.debug:
+    msg:
+      - '✓ Prerequisites check complete'
+      - "  Git: {{ 'installed' if git_check.rc == 0 else 'NOT FOUND' }}"
+      - "  Nix: {{ 'installed' if nix_check.rc == 0 else 'NOT FOUND' }}"
+      - "  Age: {{ 'installed' if age_check.rc == 0 else 'NOT FOUND' }}"
+      - "  SOPS: {{ 'installed' if sops_check.rc == 0 else 'NOT FOUND' }}"

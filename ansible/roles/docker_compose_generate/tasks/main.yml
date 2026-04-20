@@ -1,0 +1,65 @@
+---
+# tasks file for docker_compose_generate role
+# Generates a Docker Compose repository via the blueprint_repo role.
+#
+# Flow:
+#   1. Filter inventory_builder_all_vms for hosts with nixos_role=docker
+#   2. Call blueprint_repo with blueprints/docker-compose/ source
+#   3. Blueprint renders per-host README, .gitignore, GitLab CI pipeline
+#   4. Blueprint post-hook handles any additional per-host setup
+#
+# Prerequisites:
+#   inventory_builder_all_vms must be populated (by inventory_loader)
+
+- name: 'Docker Compose — Generate repository'
+  when:
+    - inventory_builder_generate_docker_compose | default(true)
+    - inventory_builder_all_vms is defined
+    - inventory_builder_all_vms | length > 0
+  block:
+    - name: Identify docker-role hosts
+      ansible.builtin.set_fact:
+        _docker_hosts_dict: >-
+          {{ dict(inventory_builder_all_vms | dict2items
+             | selectattr('value.nixos_role', 'defined')
+             | selectattr('value.nixos_role', 'equalto', 'docker')
+             | map(attribute='key')
+             | zip(inventory_builder_all_vms | dict2items
+                   | selectattr('value.nixos_role', 'defined')
+                   | selectattr('value.nixos_role', 'equalto', 'docker')
+                   | map(attribute='value'))) }}
+      run_once: true
+
+    - name: Skip if no docker hosts
+      ansible.builtin.debug:
+        msg: 'No hosts with nixos_role=docker found, skipping Docker Compose repo'
+      when: _docker_hosts_dict | length == 0
+      run_once: true
+
+    - name: Render docker-compose blueprint
+      ansible.builtin.include_role:
+        name: blueprint_repo
+      vars:
+        blueprint_name: 'docker-compose'
+        blueprint_source: '{{ inventory_builder_docker_blueprint_dir }}'
+        blueprint_output: '{{ inventory_builder_docker_repo_output_dir }}'
+        blueprint_env: '{{ inventory_builder_env }}'
+        blueprint_hosts: '{{ _docker_hosts_dict }}'
+        blueprint_owner: '{{ inventory_builder_project_owner }}'
+        blueprint_group: '{{ inventory_builder_project_group }}'
+        blueprint_template_vars:
+          domain: '{{ global_domain }}'
+          compose_base_dir: '{{ inventory_builder_docker_compose_default_base_dir }}'
+          gitlab_url: '{{ global_gitlab_url | default("") }}'
+        blueprint_git_init: true
+        blueprint_git_commit: true
+        blueprint_debug: false
+      when: _docker_hosts_dict | length > 0
+
+    - name: Display Docker Compose repo summary
+      ansible.builtin.debug:
+        msg:
+          - 'Docker Compose repo generated: {{ inventory_builder_docker_repo_output_dir }}'
+          - 'Hosts: {{ _docker_hosts_dict.keys() | list | join(", ") | default("none") }}'
+      run_once: true
+      when: _docker_hosts_dict | length > 0

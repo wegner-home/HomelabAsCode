@@ -1,0 +1,50 @@
+---
+# ===============================================
+# Cleanup localhost
+# ===============================================
+- name: Stage 7 - Post-Deployment & Cleanup
+  hosts: localhost
+  gather_facts: true
+  become: false
+  tags:
+    - stage_7
+    - cleanup
+
+  roles:
+    - role: bootstrap_cleanup
+      tags:
+        - cleanup
+        - known_hosts
+        - inventory
+
+# ===============================================
+# Deployment Summary
+# ===============================================
+- name: Stage 7 - Deployment Summary
+  hosts: localhost
+  gather_facts: false
+  tags:
+    - stage_7
+    - summary
+
+  tasks:
+    - name: Generate deployment summary
+      ansible.builtin.debug:
+        msg:
+          - '================================================'
+          - 'Stage 7 Deployment Summary'
+          - '================================================'
+          - ''
+          - 'NixOS VMs deployed (excl. GitLab): {{ groups["nixos_vms"] | default([]) | difference(groups["gitlab_vms"] | default([])) | length }}'
+          - ''
+          - 'Host Groups:'
+          - '  - Admin VMs: {{ groups["admin_vms"] | default([]) | length }}'
+          - '  - GitLab VMs: {{ groups["gitlab_vms"] | default([]) | length }} (Stage 4)'
+          - '  - Docker VMs: {{ groups["docker_vms"] | default([]) | length }}'
+          - '  - Common VMs: {{ groups["common_vms"] | default([]) | length }}'
+          - ''
+          - 'Cleanup performed on localhost:'
+          - '  ✓ Stale SSH known_hosts entries removed'
+          - '  ✓ Production inventory synced'
+          - ''
+          - 'Stage 7 complete — post-deployment cleanup finished.'

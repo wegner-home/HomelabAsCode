@@ -1,0 +1,59 @@
+---
+# Post-deployment validation for GitLab
+
+- name: Verify NixOS system is running
+  ansible.builtin.command: nixos-version
+  register: final_nixos_version
+  changed_when: false
+
+- name: Verify GitLab service is running
+  ansible.builtin.systemd:
+    name: gitlab.service
+  register: final_gitlab_status
+  failed_when: false
+
+- name: Check GitLab health
+  ansible.builtin.uri:
+    url: "{{ gitlab_health_check_scheme }}://127.0.0.1/-/health"
+    method: GET
+    return_content: true
+    status_code: 200
+    validate_certs: false
+  register: final_health_check
+  failed_when: false
+
+- name: Check GitLab readiness
+  ansible.builtin.uri:
+    url: "{{ gitlab_health_check_scheme }}://127.0.0.1/-/readiness"
+    method: GET
+    return_content: true
+    status_code: 200
+    validate_certs: false
+  register: final_readiness_check
+  failed_when: false
+
+- name: Check if container registry is accessible
+  ansible.builtin.wait_for:
+    port: "{{ gitlab_registry_port }}"
+    host: "127.0.0.1"
+    timeout: 5
+  register: registry_check
+  when: gitlab_enable_registry | bool
+  failed_when: false
+
+- name: Display validation results
+  ansible.builtin.debug:
+    msg:
+      - "========================================="
+      - "GitLab Validation Results"
+      - "========================================="
+      - "NixOS Version: {{ final_nixos_version.stdout }}"
+      - 'GitLab Service: {{ final_gitlab_status.status.ActiveState | default("unknown") }}'
+      - 'GitLab Health: {{ "OK" if final_health_check.status == 200 else "FAILED" }}'
+      - 'GitLab Readiness: {{ "OK" if final_readiness_check.status == 200 else "NOT READY" }}'
+      - 'Container Registry: {{ "Accessible" if (registry_check.failed is defined and not registry_check.failed) else "Not available" }}'
+      - ""
+      - "Access GitLab: {{ gitlab_external_url }}"
+      - "Username: root"
+      - 'Password: {{ "Set from vault" if gitlab_root_password != "changeme123!" else "changeme123! (CHANGE IMMEDIATELY)" }}'
+      - "========================================="

@@ -1,0 +1,197 @@
+---
+# Initialize a single GitLab repository from local content
+# This file is called by init_repos.yml for each project item
+
+- name: Set local variables for repository
+  ansible.builtin.set_fact:
+    repo_name: "{{ project_item.name }}"
+    repo_namespace: "{{ project_item.namespace }}"
+    repo_local_path: "{{ project_item.local_path }}"
+
+- name: Display repository being processed
+  ansible.builtin.debug:
+    msg: "Initializing repository: {{ repo_namespace }}/{{ repo_name }} from {{ repo_local_path }}"
+
+- name: Get repository details from GitLab
+  ansible.builtin.uri:
+    url: "{{ gitlab_api_url }}/api/v4/projects/{{ repo_namespace | urlencode }}%2F{{ repo_name | urlencode }}"
+    method: GET
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+    validate_certs: "{{ gitlab_ssl_verify }}"
+  register: repo_info
+  delegate_to: localhost
+  failed_when: false
+
+- name: Skip if repository doesn't exist
+  ansible.builtin.debug:
+    msg: "Repository {{ repo_namespace }}/{{ repo_name }} does not exist (status {{ repo_info.status }}), skipping initialization"
+  when: repo_info.status != 200
+
+- name: Process repository content
+  when: repo_info.status == 200
+  block:
+    - name: Set repository variables
+      ansible.builtin.set_fact:
+        repo_git_url: "{{ repo_info.json.http_url_to_repo }}"
+        repo_ssh_url: "{{ repo_info.json.ssh_url_to_repo }}"
+        repo_work_dir: "{{ temp_git_dir.path }}/{{ repo_name }}"
+
+    - name: Display repository URLs
+      ansible.builtin.debug:
+        msg:
+          - "HTTP URL: {{ repo_git_url }}"
+          - "SSH URL: {{ repo_ssh_url }}"
+          - "Local path: {{ repo_local_path }}"
+
+    - name: Check if repository already has commits
+      ansible.builtin.uri:
+        url: "{{ gitlab_api_url }}/api/v4/projects/{{ repo_info.json.id }}/repository/commits"
+        method: GET
+        headers:
+          PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+        validate_certs: "{{ gitlab_ssl_verify }}"
+      register: repo_commits
+      delegate_to: localhost
+      failed_when: false
+
+    - name: Repository will be updated with local content
+      ansible.builtin.debug:
+        msg: "Pushing local content to {{ repo_name }} (force push)"
+
+    - name: Initialize repository from local content
+      delegate_to: localhost
+      block:
+        - name: Create working directory for repository
+          ansible.builtin.file:
+            path: "{{ repo_work_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: Check for files in local path
+          ansible.builtin.stat:
+            path: "{{ repo_local_path }}"
+          register: local_path_stat
+
+        - name: Fail if local path does not exist
+          ansible.builtin.fail:
+            msg: "Local path {{ repo_local_path }} does not exist"
+          when: not local_path_stat.stat.exists
+
+        - name: Copy local content to working directory
+          ansible.posix.synchronize:
+            src: "{{ repo_local_path }}/"
+            dest: "{{ repo_work_dir }}/"
+            rsync_opts:
+              - "--exclude=.git"
+              - "--exclude=result"
+          delegate_to: localhost
+          when: local_path_stat.stat.exists and local_path_stat.stat.isdir
+
+        - name: Initialize git repository
+          ansible.builtin.command:
+            cmd: git init -b main
+            chdir: "{{ repo_work_dir }}"
+          changed_when: true
+
+        - name: Configure git user
+          ansible.builtin.command:
+            cmd: "{{ item }}"
+            chdir: "{{ repo_work_dir }}"
+          loop:
+            - git config user.name "Ansible Automation"
+            - git config user.email "ansible@localhost"
+            - git config http.sslVerify false
+          changed_when: true
+
+        - name: Add all files to git
+          ansible.builtin.command:
+            cmd: git add .
+            chdir: "{{ repo_work_dir }}"
+          changed_when: true
+
+        - name: Create initial commit
+          ansible.builtin.command:
+            cmd: git commit -m "Initial commit from iac source"
+            chdir: "{{ repo_work_dir }}"
+          changed_when: true
+          register: git_commit
+          failed_when: false
+
+        - name: Skip push if nothing to commit
+          ansible.builtin.debug:
+            msg: "No changes to commit for {{ repo_name }}"
+          when: git_commit.rc != 0
+
+        - name: Configure git remote with token authentication
+          ansible.builtin.command:
+            cmd: git remote add origin {{ repo_git_url | regex_replace('https://', 'https://root:' + gitlab_api_token + '@') }}
+            chdir: "{{ repo_work_dir }}"
+          changed_when: true
+          when: git_commit.rc == 0
+
+        - name: List all protected branches
+          ansible.builtin.uri:
+            url: "{{ gitlab_api_url }}/api/v4/projects/{{ repo_info.json.id }}/protected_branches"
+            method: GET
+            headers:
+              PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+            validate_certs: "{{ gitlab_ssl_verify }}"
+            status_code: [200]
+          delegate_to: localhost
+          register: protected_branches
+          when: git_commit.rc == 0
+
+        - name: Unprotect all branches to allow force push
+          ansible.builtin.uri:
+            url: "{{ gitlab_api_url }}/api/v4/projects/{{ repo_info.json.id }}/protected_branches/{{ item.name | urlencode }}"
+            method: DELETE
+            headers:
+              PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+            validate_certs: "{{ gitlab_ssl_verify }}"
+            status_code: [204, 404]
+          delegate_to: localhost
+          loop: "{{ protected_branches.json | default([]) }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when:
+            - git_commit.rc == 0
+            - protected_branches.json | default([]) | length > 0
+
+        - name: Push to GitLab
+          ansible.builtin.command:
+            cmd: git push -u origin main --force
+            chdir: "{{ repo_work_dir }}"
+          changed_when: true
+          when: git_commit.rc == 0
+          register: git_push
+
+        - name: Re-protect main branch
+          ansible.builtin.uri:
+            url: "{{ gitlab_api_url }}/api/v4/projects/{{ repo_info.json.id }}/protected_branches"
+            method: POST
+            headers:
+              PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+            body_format: json
+            body:
+              name: "main"
+              push_access_level: 40
+              merge_access_level: 40
+            validate_certs: "{{ gitlab_ssl_verify }}"
+            status_code: [201, 409, 422]
+          delegate_to: localhost
+          when: git_commit.rc == 0
+
+        - name: Display push result
+          ansible.builtin.debug:
+            msg: "Successfully pushed {{ repo_name }} to GitLab"
+          when: git_commit.rc == 0 and git_push is defined
+
+        - name: Clean up working directory
+          ansible.builtin.file:
+            path: "{{ repo_work_dir }}"
+            state: absent
+
+- name: Mark repository as initialized
+  ansible.builtin.debug:
+    msg: "Repository {{ repo_namespace }}/{{ repo_name }} initialization complete"

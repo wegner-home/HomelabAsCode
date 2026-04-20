@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  author: Philipp Wegner
+  description: >-
+    GitLab API bootstrap — token lifecycle (validate/create PAT via Rails console),
+    application settings enforcement, and resource provisioning
+    (groups, projects, users, memberships, SSH keys) via the GitLab REST API
+  license: MIT
+  min_ansible_version: '2.14'
+  platforms:
+    - name: GenericLinux
+      versions:
+        - all
+
+dependencies:
+  - role: sops_write

@@ -1,0 +1,40 @@
+---
+# defaults file for ssh_user role
+
+ssh_user_default_user: '{{ project_name_user | default(ansible_user_id) }}'
+ssh_user_users: '{{ global_users | default([]) }}'
+
+# ===============================================
+# SSH Directories (derived from global_ssh_*)
+# ===============================================
+ssh_user_ssh_base_dir: '{{ global_ssh_base_dir }}'
+
+# User CA (for signing user certificates)
+ssh_user_user_ca_dir: '{{ global_ssh_user_ca_dir }}'
+ssh_user_user_ca_key_name: '{{ global_ssh_user_ca_key_name }}'
+ssh_user_user_cert_validity: '{{ global_ssh_user_cert_validity }}'
+
+# Host CA (for signing host certificates)
+ssh_user_host_ca_dir: '{{ global_ssh_host_ca_dir }}'
+ssh_user_host_ca_key_name: '{{ global_ssh_host_ca_key_name }}'
+
+# Certificate directories
+ssh_user_cert_dir: '{{ global_ssh_user_cert_dir }}'
+ssh_user_host_cert_dir: '{{ global_ssh_host_cert_dir }}'
+
+# Local backup/sync directory
+ssh_user_local_cert_dir: '{{ global_iac_root }}/files/ssh/users'
+
+# ===============================================
+# SSH Client Configuration
+# ===============================================
+
+ssh_user_client_config_path: '/home/{{ project_name_user | default(ansible_env.SUDO_USER) | default(ansible_user_id) }}/.ssh/config'
+ssh_user_ssh_dir: '/home/{{ project_name_user | default(ansible_env.SUDO_USER) | default(ansible_user_id) }}/.ssh'
+
+# ===============================================
+# Service User Configuration
+# ===============================================
+# Service user (for Ansible automation, CI/CD, etc.)
+ssh_user_service_user: "{{ global_service_user | default('ansible') }}"
+ssh_user_create_service_user_cert: true

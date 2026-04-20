@@ -1,0 +1,111 @@
+---
+# Standalone host data loader for external use
+# =============================================
+# Include this task file to load all host definitions from inventory
+# without running the full generation pipeline.
+#
+# Usage in playbooks:
+#   - name: Load host data
+#     ansible.builtin.include_role:
+#       name: inventory_loader
+#       tasks_from: load_hosts.yml
+#     vars:
+#       inventory_builder_inventory_path: '{{ playbook_dir }}/inventory/dev'
+#
+# Output:
+#   inventory_builder_all_hosts: dict of all hosts with unified structure
+#   inventory_builder_all_vms: dict of NixOS VMs (vm_config only, legacy compat)
+#   inventory_builder_nixos_vms: dict of NixOS VMs (full metadata)
+#   inventory_builder_talos_cp: dict of Talos controlplane nodes
+#   inventory_builder_talos_worker: dict of Talos worker nodes
+
+# -----------------------------------------------
+# Set default inventory path if not provided
+# -----------------------------------------------
+- name: Set default inventory path
+  ansible.builtin.set_fact:
+    inventory_builder_inventory_path: >-
+      {{ (inventory_builder_inventory_path | default(inventory_dir, true))
+         | regex_replace('/+$', '') }}
+  run_once: true
+
+- name: Resolve host_vars path from inventory path
+  ansible.builtin.set_fact:
+    inventory_builder_host_vars_path: "{{ inventory_builder_inventory_path }}/host_vars"
+  run_once: true
+
+- name: Validate resolved host_vars directory exists
+  ansible.builtin.stat:
+    path: "{{ inventory_builder_host_vars_path }}"
+  register: inventory_builder_host_vars_dir_stat
+  delegate_to: localhost
+  run_once: true
+
+- name: Fail if host_vars directory cannot be found
+  ansible.builtin.assert:
+    that:
+      - inventory_builder_host_vars_dir_stat.stat.exists
+      - inventory_builder_host_vars_dir_stat.stat.isdir
+    fail_msg: >-
+      Could not find inventory host_vars directory at
+      '{{ inventory_builder_host_vars_path }}'.
+      Resolved inventory path: '{{ inventory_builder_inventory_path }}'.
+  run_once: true
+
+# -----------------------------------------------
+# Find all host_vars files
+# -----------------------------------------------
+- name: Find all host_vars files in inventory
+  ansible.builtin.find:
+    paths: "{{ inventory_builder_host_vars_path }}"
+    patterns: "*.yml,*.yaml"
+    recurse: false
+  register: inventory_builder_host_vars_files
+  delegate_to: localhost
+  run_once: true
+
+- name: Fail if no host_vars files were discovered
+  ansible.builtin.assert:
+    that:
+      - inventory_builder_host_vars_files.files | length > 0
+    fail_msg: >-
+      No host_vars files found in '{{ inventory_builder_host_vars_path }}'.
+      Check inventory selection and host_vars layout.
+  run_once: true
+
+- name: Display found host_vars files
+  ansible.builtin.debug:
+    msg: "Found {{ inventory_builder_host_vars_files.files | length }} host_vars files"
+  run_once: true
+
+# -----------------------------------------------
+# Initialize and load
+# -----------------------------------------------
+- name: Initialize unified host collection
+  ansible.builtin.set_fact:
+    inventory_builder_all_hosts: {}
+  run_once: true
+
+- name: Load and categorize ALL VM definitions (NixOS + Talos)
+  ansible.builtin.include_tasks:
+    file: _load_all_hostvars.yml
+  loop: "{{ inventory_builder_host_vars_files.files }}"
+  loop_control:
+    label: "{{ _hostvar_file.path | basename }}"
+    loop_var: _hostvar_file
+
+# -----------------------------------------------
+# Derive convenience views
+# -----------------------------------------------
+- name: Derive convenience views and legacy aliases
+  ansible.builtin.include_tasks:
+    file: _derive_host_views.yml
+
+- name: Display loaded hosts summary
+  ansible.builtin.debug:
+    msg:
+      - "Loaded {{ inventory_builder_all_hosts | length }} hosts total"
+      - 'NixOS VMs: {{ inventory_builder_nixos_vms.keys() | list | join(", ") | default("none") }}'
+      - 'Talos CP: {{ inventory_builder_talos_cp.keys() | list | join(", ") | default("none") }}'
+      - 'Talos Workers: {{ inventory_builder_talos_worker.keys() | list | join(", ") | default("none") }}'
+  run_once: true
