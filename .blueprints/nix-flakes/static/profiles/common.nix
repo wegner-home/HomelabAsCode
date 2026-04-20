@@ -44,7 +44,7 @@
     useDHCP = lib.mkDefault true; # Allow DHCP by default
 
     # Domain (default; overridden per-host by generated configuration.nix)
-    domain = lib.mkDefault "lan.wegner.cool";
+    domain = lib.mkDefault "example.lan";
 
     # Firewall enabled in modules/base.nix
   };

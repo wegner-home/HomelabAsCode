@@ -14,7 +14,7 @@ host_filter: "nixos_role == 'docker' or nixos_template == 'docker-vm'"
 # Context variables passed to all templates
 context:
   compose_base_dir: "{{ inventory_builder_docker_compose_default_base_dir | default('/opt/docker-compose') }}"
-  domain: "{{ global_domain | default('lan.wegner.cool') }}"
+  domain: "{{ global_domain | default('lab.local') }}"
 
 # Directories to create
 directories:

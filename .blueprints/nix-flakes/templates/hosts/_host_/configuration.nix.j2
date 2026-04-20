@@ -27,7 +27,7 @@ imports = [
 # Network Configuration
 # =============================================
 networking.hostName = "{{ vm_name }}";
-networking.domain = "{{ blueprint_host_context.repo_context.domain | default('lan.wegner.cool') }}";
+networking.domain = "{{ blueprint_host_context.repo_context.domain | default('example.lan') }}";
 
 {% set iface = vm_config.network_interface | default('ens18') %}
 networking.interfaces.{{ iface }} = {

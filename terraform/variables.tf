@@ -293,7 +293,7 @@ variable "global_ssh_keys" {
 variable "dns_domain" {
   description = "DNS domain for host overrides"
   type        = string
-  default     = "lan.wegner.cool"
+  default     = "example.lan"
 }
 
 variable "skip_dhcp_reservations" {

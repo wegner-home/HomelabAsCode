@@ -15,7 +15,7 @@ in
 
     gitlabUrl = mkOption {
       type = types.str;
-      default = "https://git.lan.wegner.cool";
+      default = "https://git.example.com";
       description = "GitLab instance URL";
     };
 
