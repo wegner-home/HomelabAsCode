@@ -12,6 +12,11 @@ Everything should be deployable by a single `make all`.
 ## Prerequesites
 
 - NixOS locaholst (or docker container)
+  - Terraform
+  - Ansible
+  - SOPS
+  - Age
+  - openssh
 - Proxmox Hypervisor
 - OPNSense DHCP/DNS
 
