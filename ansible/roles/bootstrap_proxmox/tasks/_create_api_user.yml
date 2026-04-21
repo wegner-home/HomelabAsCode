@@ -8,67 +8,121 @@
 # under the 'cluster' key (proxmox.cluster.*) since they replicate
 # across all clustered nodes via pveum.
 
-- name: "API {{ _api_user_name }} | Check if user exists"
+- name: 'API {{ _api_user_name }} | Check if user exists'
   ansible.builtin.shell: pveum user list | grep -w '{{ _api_user_name }}@pve'
   register: _api_user_check
   ignore_errors: true
   changed_when: false
   become: true
 
-- name: "API {{ _api_user_name }} | Create user"
+- name: 'API {{ _api_user_name }} | Create user'
   ansible.builtin.shell: pveum user add {{ _api_user_name }}@pve
   when: _api_user_check.rc != 0
   become: true
 
-- name: "API {{ _api_user_name }} | Check if role exists"
+- name: 'API {{ _api_user_name }} | Check if role exists'
   ansible.builtin.shell: pveum role list | grep -w '{{ _api_user_name }}'
   register: _api_role_check
   ignore_errors: true
   changed_when: false
   become: true
 
-- name: "API {{ _api_user_name }} | Create role"
+- name: 'API {{ _api_user_name }} | Create role'
   ansible.builtin.shell: pveum role add {{ _api_user_name }} -privs "{{ bootstrap_proxmox_default_api_privs }}"
   when: _api_role_check.rc != 0
   become: true
 
-- name: "API {{ _api_user_name }} | Check if role is assigned to user"
+- name: 'API {{ _api_user_name }} | Check if role is assigned to user'
   ansible.builtin.shell: pveum acl list | grep -w '{{ _api_user_name }}@pve' | grep -w '{{ _api_user_name }}'
   register: _api_acl_check
   ignore_errors: true
   changed_when: false
   become: true
 
-- name: "API {{ _api_user_name }} | Assign role to user"
+- name: 'API {{ _api_user_name }} | Assign role to user'
   ansible.builtin.shell: pveum aclmod / -user {{ _api_user_name }}@pve -role {{ _api_user_name }}
   when: _api_acl_check.rc != 0
   become: true
 
 - name: "API {{ _api_user_name }} | Check if API token 'bootstrap' exists"
   ansible.builtin.shell:
-    cmd: "pveum user token list {{ _api_user_name }}@pve | grep -q bootstrap"
+    cmd: 'pveum user token list {{ _api_user_name }}@pve | grep -q bootstrap'
   register: _api_token_check
   failed_when: false
   changed_when: false
   become: true
 
-- name: "API {{ _api_user_name }} | Create API token"
-  ansible.builtin.shell: pveum user token add {{ _api_user_name }}@pve bootstrap --privsep=0
-  register: _api_token_result
-  when: _api_token_check.rc != 0
+- name: 'API {{ _api_user_name }} | Evaluate runtime token presence and rotation mode'
+  ansible.builtin.set_fact:
+    _api_runtime_token_present: >-
+      {{
+        (
+          (
+            ((vault_secrets | default({})).get('proxmox', {}).get('cluster', {}).get(_api_vault_token_id_key, '') | string | length) > 0
+          )
+          and
+          (
+            ((vault_secrets | default({})).get('proxmox', {}).get('cluster', {}).get(_api_vault_token_secret_key, '') | string | length) > 0
+          )
+        )
+      }}
+    _api_rotation_mode: "{{ bootstrap_proxmox_api_token_rotation_mode | default('if_missing') }}"
+
+- name: 'API {{ _api_user_name }} | Validate rotation mode'
+  ansible.builtin.assert:
+    that:
+      - _api_rotation_mode in ['never', 'if_missing', 'always']
+    fail_msg: >-
+      Invalid bootstrap_proxmox_api_token_rotation_mode='{{ _api_rotation_mode }}'.
+      Allowed values: never, if_missing, always.
+    quiet: true
+
+- name: 'API {{ _api_user_name }} | Determine whether token rotation is required'
+  ansible.builtin.set_fact:
+    _api_should_rotate: >-
+      {{
+        (_api_token_check.rc == 0) and (
+          (_api_rotation_mode == 'always')
+          or
+          (_api_rotation_mode == 'if_missing' and not (_api_runtime_token_present | bool))
+        )
+      }}
+
+- name: 'API {{ _api_user_name }} | Fail when token exists but runtime secret is missing and rotation is disabled'
+  ansible.builtin.fail:
+    msg: >-
+      Proxmox token '{{ _api_user_name }}@pve!bootstrap' exists, but runtime secrets do not contain
+      '{{ _api_vault_token_id_key }}' / '{{ _api_vault_token_secret_key }}' under proxmox.cluster.
+      Set bootstrap_proxmox_api_token_rotation_mode to 'if_missing' or 'always',
+      or manually remove the token so Stage 1 can recreate and persist it.
+  when:
+    - _api_token_check.rc == 0
+    - not (_api_runtime_token_present | bool)
+    - _api_rotation_mode == 'never'
+
+- name: 'API {{ _api_user_name }} | Remove existing API token before rotation'
+  ansible.builtin.command:
+    cmd: 'pveum user token remove {{ _api_user_name }}@pve bootstrap'
+  when: _api_should_rotate | bool
   become: true
 
-- name: "API {{ _api_user_name }} | Parse token ID and secret"
+- name: 'API {{ _api_user_name }} | Create API token'
+  ansible.builtin.shell: pveum user token add {{ _api_user_name }}@pve bootstrap --privsep=0
+  register: _api_token_result
+  when: (_api_token_check.rc != 0) or (_api_should_rotate | bool)
+  become: true
+
+- name: 'API {{ _api_user_name }} | Parse token ID and secret'
   ansible.builtin.set_fact:
     _api_parsed_token_id: "{{ (_api_token_result.stdout | regex_search('full-tokenid *│ ([^\\s]+)', '\\1') | first) }}"
     _api_parsed_token_secret: "{{ (_api_token_result.stdout | regex_search('value *│ ([0-9a-f\\-]+)', '\\1') | first) }}"
-  when: _api_token_check.rc != 0
+  when: (_api_token_check.rc != 0) or (_api_should_rotate | bool)
 
-- name: "API {{ _api_user_name }} | Save token to vault fact"
+- name: 'API {{ _api_user_name }} | Save token to vault fact'
   ansible.builtin.set_fact:
-    "{{ _api_vault_fact_name }}": >-
+    '{{ _api_vault_fact_name }}': >-
       {{ {'proxmox': {'cluster': {
         _api_vault_token_id_key: _api_parsed_token_id,
         _api_vault_token_secret_key: _api_parsed_token_secret
       }}} }}
-  when: _api_token_check.rc != 0
+  when: (_api_token_check.rc != 0) or (_api_should_rotate | bool)
