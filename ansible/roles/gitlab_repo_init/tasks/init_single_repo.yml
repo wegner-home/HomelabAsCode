@@ -78,15 +78,13 @@
             msg: "Local path {{ repo_local_path }} does not exist"
           when: not local_path_stat.stat.exists
 
-        - name: Copy local content to working directory
-          ansible.posix.synchronize:
-            src: "{{ repo_local_path }}/"
-            dest: "{{ repo_work_dir }}/"
-            rsync_opts:
-              - "--exclude=.git"
-              - "--exclude=result"
-          delegate_to: localhost
+        - name: Copy local content to working directory (local rsync)
+          ansible.builtin.command: >-
+            /run/current-system/sw/bin/rsync --archive --compress --delay-updates
+            --exclude=.git --exclude=result {{ repo_local_path }}/ {{ repo_work_dir }}/
           when: local_path_stat.stat.exists and local_path_stat.stat.isdir
+          register: rsync_result
+          failed_when: rsync_result.rc != 0
 
         - name: Initialize git repository
           ansible.builtin.command:
@@ -112,7 +110,7 @@
 
         - name: Create initial commit
           ansible.builtin.command:
-            cmd: git commit -m "Initial commit from iac source"
+            cmd: git commit -m "Initial commit from homelab source"
             chdir: "{{ repo_work_dir }}"
           changed_when: true
           register: git_commit
