@@ -33,7 +33,6 @@ Clusters are organized by environment matching the `NIX_ENV` variable:
 | MetalLB      | Bare-metal load balancer   |
 | Traefik      | Ingress controller         |
 | cert-manager | TLS certificate automation |
-| kube-vip     | Control plane VIP          |
 | SOPS         | Secret encryption with age |
 
 ## Usage

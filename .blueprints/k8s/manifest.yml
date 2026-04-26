@@ -16,9 +16,6 @@ context:
   cluster_name: "{{ global_talos_cluster.cluster_name | default('{{ project_name }}') }}"
   fluxcd_git_repo: "{{ global_talos_cluster.fluxcd.git_repo | default('') }}"
   fluxcd_git_branch: "{{ global_talos_cluster.fluxcd.git_branch | default('main') }}"
-  kube_vip_enabled: '{{ global_talos_cluster.vip.enabled | default(false) }}'
-  kube_vip_address: "{{ global_talos_cluster.vip.ip | default('') }}"
-  kube_vip_interface: "{{ global_talos_cluster.vip.interface | default('eth0') }}"
   traefik_enabled: '{{ global_talos_cluster.traefik.enabled | default(true) }}'
   traefik_domain: '{{ global_talos_cluster.traefik.domain | default(global_domain) }}'
   traefik_dashboard_subdomain: "{{ global_talos_cluster.traefik.dashboard_subdomain | default('traefik') }}"
@@ -44,6 +41,7 @@ static:
     - '.git'
     - '*.j2' # Don't copy template files as static
     - '*.bak'
+    - 'infrastructure/controllers/kube-vip/**'
 
 # Files that should never be overwritten
 static_preserve:

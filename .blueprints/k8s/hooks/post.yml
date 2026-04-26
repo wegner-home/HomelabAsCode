@@ -1,25 +1,6 @@
 ---
 # Post-generation hook for k8s blueprint
-# Handles conditional kube-vip template rendering and placeholder files
-
-- name: 'Post-hook — Handle kube-vip HelmRelease (templated vs static)'
-  block:
-    - name: 'Render kube-vip HelmRelease with VIP config (VIP enabled)'
-      ansible.builtin.template:
-        src: '{{ blueprint_source_dir }}/templates/infrastructure/controllers/kube-vip/helmrelease.yaml.j2'
-        dest: '{{ blueprint_output_dir }}/infrastructure/controllers/kube-vip/helmrelease.yaml'
-        mode: '0644'
-      vars:
-        kube_vip_address: '{{ blueprint_repo_context.kube_vip_address }}'
-        kube_vip_interface: '{{ blueprint_repo_context.kube_vip_interface }}'
-      when: blueprint_repo_context.kube_vip_enabled | bool
-
-    - name: 'Copy static kube-vip HelmRelease (VIP disabled)'
-      ansible.builtin.copy:
-        src: '{{ blueprint_source_dir }}/static/infrastructure/controllers/kube-vip/helmrelease.yaml'
-        dest: '{{ blueprint_output_dir }}/infrastructure/controllers/kube-vip/helmrelease.yaml'
-        mode: '0644'
-      when: not (blueprint_repo_context.kube_vip_enabled | bool)
+# Handles post-generation placeholder files
 
 - name: 'Post-hook — Create gotk-components.yaml placeholder'
   ansible.builtin.copy:
