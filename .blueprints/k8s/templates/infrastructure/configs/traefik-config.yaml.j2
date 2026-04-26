@@ -1,0 +1,48 @@
+---
+# Redirect plain HTTP traffic to HTTPS
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-to-https
+  namespace: traefik
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+# Route Traefik dashboard via IngressRoute (reverse-proxy to api@internal)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: traefik-dashboard
+  namespace: traefik
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: >-
+        Host(`{{ (blueprint_repo_context.traefik_dashboard_subdomain | default('traefik')) ~ '.' ~ (blueprint_repo_context.traefik_domain | default('example.local')) }}`)
+      kind: Rule
+      services:
+        - name: api@internal
+          kind: TraefikService
+  tls:
+    secretName: traefik-dashboard-tls
+---
+# Certificate for Traefik dashboard route
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: traefik-dashboard-tls
+  namespace: traefik
+spec:
+  secretName: traefik-dashboard-tls
+  dnsNames:
+    - {{ (blueprint_repo_context.traefik_dashboard_subdomain | default('traefik')) ~ '.' ~ (blueprint_repo_context.traefik_domain | default('example.local')) }}
+  issuerRef:
+{% if blueprint_repo_context.traefik_cloudflare_enabled | default(false) | bool %}
+    name: {{ blueprint_repo_context.traefik_cloudflare_issuer_name | default('letsencrypt-cloudflare') }}
+{% else %}
+    name: selfsigned-issuer
+{% endif %}
+    kind: ClusterIssuer

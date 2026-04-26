@@ -1,0 +1,37 @@
+---
+# Self-signed ClusterIssuer for internal certificates
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+spec:
+  selfSigned: {}
+---
+# CA Issuer - create a self-signed CA for internal use
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: ca-issuer
+spec:
+  ca:
+    secretName: ca-key-pair
+{% if blueprint_repo_context.traefik_cloudflare_enabled | default(false) | bool %}
+---
+# ACME ClusterIssuer using Cloudflare DNS-01
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ blueprint_repo_context.traefik_cloudflare_issuer_name | default('letsencrypt-cloudflare') }}
+spec:
+  acme:
+    email: {{ blueprint_repo_context.traefik_cloudflare_acme_email | default('admin@example.com') }}
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: {{ blueprint_repo_context.traefik_cloudflare_issuer_name | default('letsencrypt-cloudflare') }}-account-key
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: {{ blueprint_repo_context.traefik_cloudflare_api_token_secret_name | default('cloudflare-api-token') }}
+              key: {{ blueprint_repo_context.traefik_cloudflare_api_token_secret_key | default('api-token') }}
+{% endif %}

@@ -16,10 +16,19 @@ context:
   cluster_name: "{{ global_talos_cluster.cluster_name | default('{{ project_name }}') }}"
   fluxcd_git_repo: "{{ global_talos_cluster.fluxcd.git_repo | default('') }}"
   fluxcd_git_branch: "{{ global_talos_cluster.fluxcd.git_branch | default('main') }}"
-  metallb_address_pool: "{{ global_talos_cluster.metallb.address_pool | default('10.90.1.0/8') }}"
   kube_vip_enabled: '{{ global_talos_cluster.vip.enabled | default(false) }}'
   kube_vip_address: "{{ global_talos_cluster.vip.ip | default('') }}"
   kube_vip_interface: "{{ global_talos_cluster.vip.interface | default('eth0') }}"
+  traefik_enabled: '{{ global_talos_cluster.traefik.enabled | default(true) }}'
+  traefik_domain: '{{ global_talos_cluster.traefik.domain | default(global_domain) }}'
+  traefik_dashboard_subdomain: "{{ global_talos_cluster.traefik.dashboard_subdomain | default('traefik') }}"
+  traefik_service_type: "{{ global_talos_cluster.traefik.service_type | default('LoadBalancer') }}"
+  traefik_replicas: '{{ global_talos_cluster.traefik.replicas | default(1) }}'
+  traefik_cloudflare_enabled: '{{ global_talos_cluster.traefik.cloudflare.enabled | default(false) }}'
+  traefik_cloudflare_issuer_name: "{{ global_talos_cluster.traefik.cloudflare.issuer_name | default('letsencrypt-cloudflare') }}"
+  traefik_cloudflare_acme_email: "{{ global_talos_cluster.traefik.cloudflare.acme_email | default('admin@' + global_domain) }}"
+  traefik_cloudflare_api_token_secret_name: "{{ global_talos_cluster.traefik.cloudflare.api_token_secret_name | default('cloudflare-api-token') }}"
+  traefik_cloudflare_api_token_secret_key: "{{ global_talos_cluster.traefik.cloudflare.api_token_secret_key | default('api-token') }}"
   sops_age_public_key: "{{ global_sops_age_public_key | default('') }}"
 
 # Directories to create

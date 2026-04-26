@@ -27,9 +27,22 @@
           - 'Environment:      {{ inventory_builder_env }}'
           - 'Cluster:          {{ global_talos_cluster.cluster_name | default(project_name) }}'
           - 'FluxCD repo:      {{ global_talos_cluster.fluxcd.git_repo | default("(not set)") }}'
-          - 'MetalLB pool:     {{ global_talos_cluster.metallb.address_pool | default("10.90.1.0/24") }}'
           - 'kube-vip:         {{ global_talos_cluster.vip.enabled | default(false) | ternary(global_talos_cluster.vip.ip | default(""), "disabled") }}'
+          - 'Traefik:          {{ global_talos_cluster.traefik.enabled | default(true) | ternary("enabled", "disabled") }}'
+          - 'Ingress domain:   {{ (global_talos_cluster.traefik.domain | default(global_domain, true)) }}'
+          - 'Cloudflare DNS01: {{ global_talos_cluster.traefik.cloudflare.enabled | default(false) | ternary("enabled", "disabled") }}'
           - '================================================'
+      run_once: true
+
+    - name: Validate Cloudflare API token when DNS-01 is enabled
+      ansible.builtin.assert:
+        that:
+          - (vault_secrets.cloudflare.api_token | default('')) | length > 0
+        fail_msg: >-
+          Cloudflare DNS-01 is enabled but no token was found in SOPS secrets.
+          Set vault_secrets.cloudflare.api_token and re-run stage_2.
+        quiet: true
+      when: global_talos_cluster.traefik.cloudflare.enabled | default(false) | bool
       run_once: true
 
     - name: Render k8s blueprint
@@ -47,10 +60,20 @@
           cluster_name: '{{ global_talos_cluster.cluster_name | default(project_name) }}'
           fluxcd_git_repo: '{{ global_talos_cluster.fluxcd.git_repo | default("") }}'
           fluxcd_git_branch: '{{ global_talos_cluster.fluxcd.git_branch | default("main") }}'
-          metallb_address_pool: '{{ global_talos_cluster.metallb.address_pool | default("10.90.1.0/24") }}'
           kube_vip_enabled: '{{ global_talos_cluster.vip.enabled | default(false) }}'
           kube_vip_address: '{{ global_talos_cluster.vip.ip | default("") }}'
           kube_vip_interface: '{{ global_talos_cluster.vip.interface | default("eth0") }}'
+          traefik_enabled: '{{ global_talos_cluster.traefik.enabled | default(true) }}'
+          traefik_domain: '{{ global_talos_cluster.traefik.domain | default(global_domain, true) }}'
+          traefik_dashboard_subdomain: '{{ global_talos_cluster.traefik.dashboard_subdomain | default("traefik") }}'
+          traefik_service_type: '{{ global_talos_cluster.traefik.service_type | default("LoadBalancer") }}'
+          traefik_replicas: '{{ global_talos_cluster.traefik.replicas | default(1) }}'
+          traefik_cloudflare_enabled: '{{ global_talos_cluster.traefik.cloudflare.enabled | default(false) }}'
+          traefik_cloudflare_issuer_name: '{{ global_talos_cluster.traefik.cloudflare.issuer_name | default("letsencrypt-cloudflare") }}'
+          traefik_cloudflare_acme_email: '{{ global_talos_cluster.traefik.cloudflare.acme_email | default("admin@" + global_domain) }}'
+          traefik_cloudflare_api_token_secret_name: '{{ global_talos_cluster.traefik.cloudflare.api_token_secret_name | default("cloudflare-api-token") }}'
+          traefik_cloudflare_api_token_secret_key: '{{ global_talos_cluster.traefik.cloudflare.api_token_secret_key | default("api-token") }}'
+          traefik_cloudflare_api_token: '{{ vault_secrets.cloudflare.api_token | default("") }}'
           sops_age_public_key: '{{ global_sops_age_public_key | default("") }}'
         blueprint_git_init: true
         blueprint_git_commit: true
@@ -68,10 +91,9 @@
           - ''
           - 'Infrastructure controllers:'
           - '  - Cilium (CNI)'
-          - '  - MetalLB (LoadBalancer: {{ global_talos_cluster.metallb.address_pool | default("10.90.1.0/24") }})'
           - '  - kube-vip ({{ global_talos_cluster.vip.enabled | default(false) | ternary("enabled: " + (global_talos_cluster.vip.ip | default("")), "disabled") }})'
           - '  - cert-manager'
-          - '  - Traefik (Ingress)'
+          - '  - Traefik (Ingress: {{ global_talos_cluster.traefik.enabled | default(true) | ternary("enabled", "disabled") }}, domain={{ global_talos_cluster.traefik.domain | default(global_domain, true) }})'
           - '  - SOPS secrets operator'
           - ''
           - 'Next steps:'

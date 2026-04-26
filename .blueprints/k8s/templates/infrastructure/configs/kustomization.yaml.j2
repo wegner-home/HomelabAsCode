@@ -1,0 +1,11 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - cert-manager-config.yaml
+{% if blueprint_repo_context.traefik_enabled | default(true) | bool %}
+  - traefik-config.yaml
+{% endif %}
+{% if blueprint_repo_context.traefik_cloudflare_enabled | default(false) | bool %}
+  - cloudflare-token-secret.sops.yaml
+{% endif %}

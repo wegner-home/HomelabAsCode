@@ -13,11 +13,6 @@
     - bootstrap
     - localhost
 
-  pre_tasks:
-    - name: Load and merge vault secrets
-      ansible.builtin.include_tasks:
-        file: '{{ playbook_dir }}/helpers/load_vaults.yml'
-
   roles:
     - role: bootstrap_localhost
       tags: ['bootstrap', 'localhost', 'directories', 'users']

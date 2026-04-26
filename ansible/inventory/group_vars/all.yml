@@ -337,6 +337,21 @@ global_talos_cluster:
     git_path: 'clusters/dev'
     git_insecure: True
 
+  # Traefik ingress/reverse-proxy
+  # domain can be set to a public domain different from global_domain.
+  traefik:
+    enabled: true
+    domain: '{{ global_domain }}'
+    dashboard_subdomain: 'traefik'
+    service_type: 'LoadBalancer'
+    replicas: 1
+    cloudflare:
+      enabled: false
+      issuer_name: 'letsencrypt-cloudflare'
+      acme_email: 'admin@{{ global_domain }}'
+      api_token_secret_name: 'cloudflare-api-token'
+      api_token_secret_key: 'api-token'
+
   # Artifact storage
   artifacts:
     output_dir: '../config/k8s/talos'
