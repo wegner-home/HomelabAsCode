@@ -9,8 +9,8 @@ those secrets need to survive across playbook runs. This role provides the
 **write path** — it reads an existing SOPS file, merges in new secrets, and
 re-encrypts the result with age.
 
-On subsequent runs, the persisted secrets are loaded back via
-`helpers/load_vaults.yml` into the `vault_secrets` variable.
+On subsequent runs, persisted secrets are loaded via direct
+`community.sops.sops` lookups into the `vault_secrets` variable.
 
 ## Requirements
 

@@ -2,7 +2,7 @@
 # helpers/nixos_vm_pretasks.yml
 # ============================================================
 # Common pre-tasks for all NixOS VM plays.
-# Handles the SSH wait → Python bootstrap → fact gather → vault load
+# Handles the SSH wait → Python bootstrap → fact gather
 # sequence that every NixOS-targeting play needs.
 #
 # Usage (in a playbook's pre_tasks):
@@ -14,11 +14,10 @@
 #
 # Requires:
 #   - ansible_host set on target (via hosts.yml or host_vars)
-#   - SOPS age key available (for vault loading)
 
 - name: Wait for SSH to become available
   ansible.builtin.wait_for:
-    host: "{{ ansible_host }}"
+    host: '{{ ansible_host }}'
     port: 22
     delay: 5
     timeout: 300
@@ -34,13 +33,8 @@
   changed_when: false
   vars:
     # Ensure raw module uses the same SSH options as ansible.cfg
-    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 
 - name: Gather facts now that Python is available
   ansible.builtin.setup:
   become: false
-
-- name: Load and merge vault secrets
-  ansible.builtin.include_tasks:
-    file: "{{ playbook_dir }}/helpers/load_vaults.yml"
-  tags: ["always"]

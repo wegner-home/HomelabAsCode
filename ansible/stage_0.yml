@@ -25,4 +25,3 @@
 
     - role: cf_cert
       tags: ['cloudflare', 'certificate', 'tls']
-

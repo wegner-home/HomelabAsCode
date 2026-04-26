@@ -5,7 +5,7 @@ collections:
   - name: community.general
     version: ">=8.0.0"
 
-  # SOPS — decrypt secrets via community.sops.sops lookup (used by helpers/load_vaults.yml)
+  # SOPS — decrypt secrets via community.sops.sops lookup
   - name: community.sops
     version: ">=1.6.0"
 

@@ -191,6 +191,24 @@ global_sops_key_path: '{{ sops_age_keyfile }}'
 global_sops_secrets_dir: '{{ project_root }}/secrets/{{ project_name }}'
 global_sops_runtime_file: '{{ global_sops_secrets_dir }}/runtime_secrets.sops.yaml'
 
+# Unified secrets dictionary loaded directly via SOPS lookups.
+# Runtime secrets override static secrets on key collisions.
+vault_secrets: >-
+  {{
+    (
+      (lookup('community.sops.sops', global_sops_secrets_file, output_type='json', empty_on_not_exist=true)
+       | default('{}', true)
+       | from_json).vault_secrets
+      | default({})
+    )
+    | combine(
+      lookup('community.sops.sops', global_sops_runtime_file, output_type='json', empty_on_not_exist=true)
+      | default('{}', true)
+      | from_json,
+      recursive=True
+    )
+  }}
+
 # SOPS secrets mapping by host role
 #
 # Each role defines which vault keys map to which SOPS secret names.

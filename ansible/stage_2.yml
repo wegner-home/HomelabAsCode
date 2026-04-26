@@ -13,11 +13,6 @@
     - generate
     - templates
 
-  pre_tasks:
-    - name: Load and merge vault secrets
-      ansible.builtin.include_tasks:
-        file: "{{ playbook_dir }}/helpers/load_vaults.yml"
-
   vars:
     # Generate both NixOS VM and Talos K8s tfvars in this stage
     inventory_builder_generate_talos: true
@@ -27,7 +22,7 @@
   tasks:
     - name: Display stage information
       ansible.builtin.debug:
-        msg: "Starting Stage 2: Generate Templates (Terraform tfvars, NixOS flakes, Docker Compose, K8s)"
+        msg: 'Starting Stage 2: Generate Templates (Terraform tfvars, NixOS flakes, Docker Compose, K8s)'
 
     - name: Generate Terraform variables from inventory
       ansible.builtin.import_role:
