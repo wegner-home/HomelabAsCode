@@ -25,6 +25,38 @@
 #   ansible-playbook stage_6.yml             # Service VMs
 
 # ===============================================
+# Play 0: Ensure GitLab API token exists for Flux bootstrap
+# ===============================================
+# Resilience behavior:
+# - Reuses gitlab_api_bootstrap token lifecycle only (no groups/projects/users)
+# - Safe to rerun standalone when Flux fails due to missing token:
+#     ansible-playbook stage_5.yml -i inventory/<env> --tags gitlab_token
+- name: Stage 5 - Ensure GitLab API token for FluxCD
+  hosts: gitlab_vms
+  gather_facts: false
+  become: true
+  tags:
+    - stage_5
+    - talos
+    - fluxcd
+    - gitlab
+    - gitlab_token
+
+  pre_tasks:
+    - name: Bootstrap NixOS VM for Ansible
+      ansible.builtin.include_tasks:
+        file: '{{ playbook_dir }}/helpers/nixos_vm_pretasks.yml'
+      tags: ['always']
+
+  tasks:
+    - name: Ensure GitLab API token lifecycle
+      ansible.builtin.include_role:
+        name: gitlab_api_bootstrap
+        tasks_from: token_lifecycle.yml
+      tags:
+        - gitlab_token
+
+# ===============================================
 # Bootstrap Talos Cluster + FluxCD
 # ===============================================
 # This play runs the talos_bootstrap role which handles:
@@ -50,10 +82,6 @@
     - talos_bootstrap
 
   pre_tasks:
-    - name: Load and merge vault secrets
-      ansible.builtin.include_tasks:
-        file: "{{ playbook_dir }}/helpers/load_vaults.yml"
-
     - name: Check if Talos cluster is enabled
       ansible.builtin.assert:
         that:
@@ -68,14 +96,14 @@
     - name: Display bootstrap information
       ansible.builtin.debug:
         msg:
-          - "================================================"
-          - "Stage 5: Talos Cluster Bootstrap"
-          - "================================================"
-          - 'Cluster:  {{ global_talos_cluster.cluster_name | default("cluster-01") }}'
+          - '================================================'
+          - 'Stage 5: Talos Cluster Bootstrap'
+          - '================================================'
+          - 'Cluster:  {{ global_talos_cluster.cluster_name | default("homelab") }}'
           - 'Mode:     {{ global_talos_cluster.bootstrap_mode | default("bootstrap") }}'
           - 'Endpoint: {{ global_talos_cluster.cluster_endpoint | default("N/A") }}'
-          - "CP nodes: {{ global_talos_cluster.controlplane_count | default(3) }}"
-          - "Workers:  {{ global_talos_cluster.worker_count | default(0) }}"
+          - 'CP nodes: {{ global_talos_cluster.controlplane_count | default(3) }}'
+          - 'Workers:  {{ global_talos_cluster.worker_count | default(0) }}'
 
   roles:
     - role: talos_bootstrap

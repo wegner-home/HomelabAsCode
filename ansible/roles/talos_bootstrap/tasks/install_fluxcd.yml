@@ -19,17 +19,18 @@
 - name: Set KUBECONFIG for flux commands
   ansible.builtin.set_fact:
     _kubeconfig_env:
-      KUBECONFIG: "{{ talos_kubeconfig_path }}"
+      KUBECONFIG: '{{ talos_kubeconfig_path }}'
 
 - name: Validate GitLab API token is available
   ansible.builtin.assert:
     that:
       - talos_fluxcd_git_token | length > 0
     fail_msg: >-
-      GitLab API token not found in vault_secrets.gitlab.api_token.
+      GitLab API token not found in SOPS secrets.
       Either:
         1. Re-run Stage 4 (gitlab_api_bootstrap) to generate and persist the token, or
-        2. Add gitlab.api_token to secrets/{{ talos_env }}/secrets.sops.yaml manually.
+        2. Add gitlab.api_token to secrets/{{ talos_env }}/runtime_secrets.sops.yaml
+           (or vault_secrets.gitlab.api_token in secrets.sops.yaml) manually.
     quiet: true
 
 # ===============================================
@@ -37,14 +38,14 @@
 # ===============================================
 - name: Check if flux-system namespace exists
   ansible.builtin.command: kubectl get namespace flux-system -o name
-  environment: "{{ _kubeconfig_env }}"
+  environment: '{{ _kubeconfig_env }}'
   register: _flux_ns_check
   changed_when: false
   failed_when: false
 
 - name: Check if FluxCD controllers are running
   ansible.builtin.command: kubectl get deployments -n flux-system -o name
-  environment: "{{ _kubeconfig_env }}"
+  environment: '{{ _kubeconfig_env }}'
   register: _flux_deployments
   changed_when: false
   failed_when: false
@@ -69,7 +70,7 @@
 # flux install only talks to the K8s API — no git interaction needed.
 - name: Install FluxCD controllers
   ansible.builtin.command: flux install
-  environment: "{{ _kubeconfig_env }}"
+  environment: '{{ _kubeconfig_env }}'
   register: _flux_install
   changed_when: "'successfully' in (_flux_install.stderr | default(''))"
   when: _fluxcd_install_needed | bool
@@ -82,7 +83,7 @@
     kubectl rollout status deployment/source-controller
     --namespace flux-system
     --timeout=120s
-  environment: "{{ _kubeconfig_env }}"
+  environment: '{{ _kubeconfig_env }}'
   register: _flux_source_ready
   changed_when: false
 
@@ -91,7 +92,7 @@
     kubectl rollout status deployment/kustomize-controller
     --namespace flux-system
     --timeout=120s
-  environment: "{{ _kubeconfig_env }}"
+  environment: '{{ _kubeconfig_env }}'
   register: _flux_kustomize_ready
   changed_when: false
 
@@ -118,7 +119,7 @@
 
 - name: Set CA injection needed fact
   ansible.builtin.set_fact:
-    _ca_inject_needed: "{{ (talos_fluxcd_git_insecure | bool) and (_git_cert_verify.rc | default(0) != 0) }}"
+    _ca_inject_needed: '{{ (talos_fluxcd_git_insecure | bool) and (_git_cert_verify.rc | default(0) != 0) }}'
 
 - name: Display CA cert status
   ansible.builtin.debug:
@@ -152,8 +153,8 @@
 - name: Write CA certificate to temp file
   ansible.builtin.copy:
     content: "{{ _git_server_ca_cert.stdout }}\n"
-    dest: "{{ talos_output_dir }}/.git-ca.crt"
-    mode: "0600"
+    dest: '{{ talos_output_dir }}/.git-ca.crt'
+    mode: '0600'
   when: _ca_inject_needed | bool
 
 # ===============================================
@@ -174,8 +175,8 @@
   no_log: true
 
 - name: Create and apply git auth secret
-  ansible.builtin.shell: "{{ _secret_cmd }}"
-  environment: "{{ _kubeconfig_env }}"
+  ansible.builtin.shell: '{{ _secret_cmd }}'
+  environment: '{{ _kubeconfig_env }}'
   register: _git_secret_apply
   changed_when: "'created' in _git_secret_apply.stdout or 'configured' in _git_secret_apply.stdout"
   no_log: true
@@ -193,16 +194,16 @@
         namespace: flux-system
       spec:
         interval: 1m
-        url: "{{ talos_fluxcd_git_repo }}"
+        url: '{{ talos_fluxcd_git_repo }}'
         ref:
-          branch: "{{ talos_fluxcd_git_branch }}"
+          branch: '{{ talos_fluxcd_git_branch }}'
         secretRef:
           name: flux-system
 
 - name: Apply flux-system GitRepository
   ansible.builtin.shell: >
     echo '{{ _git_repo_manifest | to_json }}' | kubectl apply -f -
-  environment: "{{ _kubeconfig_env }}"
+  environment: '{{ _kubeconfig_env }}'
   register: _git_repo_apply
   changed_when: "'created' in _git_repo_apply.stdout or 'configured' in _git_repo_apply.stdout"
 
@@ -219,7 +220,7 @@
         namespace: flux-system
       spec:
         interval: 10m
-        path: "./{{ talos_fluxcd_git_path }}"
+        path: './{{ talos_fluxcd_git_path }}'
         prune: true
         sourceRef:
           kind: GitRepository
@@ -228,7 +229,7 @@
 - name: Apply flux-system Kustomization
   ansible.builtin.shell: >
     echo '{{ _kustomization_manifest | to_json }}' | kubectl apply -f -
-  environment: "{{ _kubeconfig_env }}"
+  environment: '{{ _kubeconfig_env }}'
   register: _kustomization_apply
   changed_when: "'created' in _kustomization_apply.stdout or 'configured' in _kustomization_apply.stdout"
 
@@ -243,7 +244,7 @@
     kubectl get gitrepository/flux-system
     --namespace flux-system
     -o jsonpath='{.status.conditions[?(@.type=="Ready")]}'
-  environment: "{{ _kubeconfig_env }}"
+  environment: '{{ _kubeconfig_env }}'
   register: _git_repo_status
   changed_when: false
   retries: 6
@@ -255,6 +256,33 @@
     _git_repo_ready_status: "{{ (_git_repo_status.stdout | from_json).get('status', 'Unknown') }}"
     _git_repo_ready_reason: "{{ (_git_repo_status.stdout | from_json).get('reason', 'Unknown') }}"
     _git_repo_ready_message: "{{ (_git_repo_status.stdout | from_json).get('message', '') }}"
+
+- name: Wait for GitRepository to finish progressing
+  ansible.builtin.command: >
+    kubectl get gitrepository/flux-system
+    --namespace flux-system
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")]}'
+  environment: '{{ _kubeconfig_env }}'
+  register: _git_repo_status_progress
+  changed_when: false
+  retries: 30
+  delay: 10
+  until: >-
+    _git_repo_status_progress.rc == 0
+    and _git_repo_status_progress.stdout | length > 0
+    and (_git_repo_status_progress.stdout | from_json).get('reason', 'Unknown') != 'Progressing'
+  when:
+    - _git_repo_ready_status != "True"
+    - _git_repo_ready_reason == "Progressing"
+
+- name: Re-evaluate GitRepository readiness after progressing wait
+  ansible.builtin.set_fact:
+    _git_repo_ready_status: "{{ (_git_repo_status_progress.stdout | from_json).get('status', _git_repo_ready_status) }}"
+    _git_repo_ready_reason: "{{ (_git_repo_status_progress.stdout | from_json).get('reason', _git_repo_ready_reason) }}"
+    _git_repo_ready_message: "{{ (_git_repo_status_progress.stdout | from_json).get('message', _git_repo_ready_message) }}"
+  when:
+    - _git_repo_status_progress is defined
+    - _git_repo_status_progress.stdout | default('') | length > 0
 
 - name: Fail on real GitRepository errors (not empty repo)
   ansible.builtin.fail:
@@ -268,10 +296,10 @@
 - name: Display FluxCD bootstrap summary
   ansible.builtin.debug:
     msg:
-      - "--- FluxCD Bootstrap Complete ---"
-      - "Repo:     {{ talos_fluxcd_git_repo }}"
-      - "Branch:   {{ talos_fluxcd_git_branch }}"
-      - "Path:     {{ talos_fluxcd_git_path }}"
-      - "Status:   {{ _git_repo_ready_reason }} ({{ _git_repo_ready_message }})"
+      - '--- FluxCD Bootstrap Complete ---'
+      - 'Repo:     {{ talos_fluxcd_git_repo }}'
+      - 'Branch:   {{ talos_fluxcd_git_branch }}'
+      - 'Path:     {{ talos_fluxcd_git_path }}'
+      - 'Status:   {{ _git_repo_ready_reason }} ({{ _git_repo_ready_message }})'
       - "Self-signed CA: {{ 'injected into secret' if (_ca_inject_needed | bool) else 'not needed (cert trusted)' }}"
-      - "Controllers: source-controller, kustomize-controller ready"
+      - 'Controllers: source-controller, kustomize-controller ready'

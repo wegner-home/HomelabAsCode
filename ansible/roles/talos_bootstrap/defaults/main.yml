@@ -5,7 +5,7 @@
 # ===============================================
 # Cluster Identity
 # ===============================================
-talos_cluster_name: '{{ global_talos_cluster.cluster_name | default(project_name) }}'
+talos_cluster_name: '{{ global_talos_cluster.cluster_name | default("homelab") }}'
 talos_cluster_endpoint: '{{ global_talos_cluster.cluster_endpoint }}'
 talos_kubernetes_version: '{{ global_talos_cluster.kubernetes_version | default("v1.32.0") }}'
 talos_version: '{{ global_talos_cluster.talos_version | default("v1.7.6") }}'
@@ -21,10 +21,26 @@ talos_bootstrap_mode: '{{ global_talos_cluster.bootstrap_mode | default("bootstr
 # ===============================================
 # Node Topology (derived from inventory)
 # ===============================================
-talos_controlplane_count: '{{ global_talos_cluster.controlplane_count | default(3) | int }}'
-talos_worker_count: '{{ global_talos_cluster.worker_count | default(3) | int }}'
+# By default, node counts are derived from inventory groups so you don't need
+# to declare them separately in global_talos_cluster.
+# Set global_talos_cluster.strict_inventory_counts=true to enforce explicit
+# controlplane_count/worker_count values against discovered inventory IPs.
+talos_strict_inventory_counts: '{{ global_talos_cluster.strict_inventory_counts | default(false) | bool }}'
+talos_controlplane_count: >-
+  {{ (talos_strict_inventory_counts | bool)
+     | ternary(
+         global_talos_cluster.controlplane_count | default(3),
+         groups['talos_control_plane'] | default([]) | length
+       )
+     | int }}
+talos_worker_count: >-
+  {{ (talos_strict_inventory_counts | bool)
+     | ternary(
+         global_talos_cluster.worker_count | default(3),
+         groups['talos_workers'] | default([]) | length
+       )
+     | int }}
 talos_allow_scheduling_on_controlplane: '{{ global_talos_cluster.allow_scheduling_on_controlplane | default(false) | bool }}'
-
 talos_controlplane_ip_start: '{{ global_talos_cluster.controlplane.ip_start }}'
 talos_worker_ip_start: '{{ global_talos_cluster.worker.ip_start }}'
 
@@ -66,10 +82,20 @@ talos_fluxcd_git_repo: >-
          "https://git." + global_domain + "/infrastructure/k8s.git"
        ) }}
 talos_fluxcd_git_branch: '{{ global_talos_cluster.fluxcd.git_branch | default("main") }}'
-talos_fluxcd_git_path: '{{ global_talos_cluster.fluxcd.git_path | default("clusters/" ~ project_name) }}'
-# GitLab API token — loaded from vault_secrets (static secrets.sops.yaml OR
-# runtime_secrets.sops.yaml written by Stage 4). load_vaults.yml merges both.
-talos_fluxcd_git_token: '{{ vault_secrets.gitlab.api_token | default("") }}'
+talos_fluxcd_git_path: '{{ global_talos_cluster.fluxcd.git_path | default("clusters/homelab") }}'
+# GitLab API token — dynamically resolved from SOPS files at evaluation time:
+# runtime_secrets.sops.yaml (preferred) -> secrets.sops.yaml (fallback).
+talos_fluxcd_git_token: >-
+  {{
+    (lookup('community.sops.sops', global_sops_runtime_file, output_type='json', empty_on_not_exist=true)
+      | default('{}', true) | from_json).gitlab.api_token
+    | default(
+        (lookup('community.sops.sops', global_sops_secrets_file, output_type='json')
+          | from_json).vault_secrets.gitlab.api_token
+        | default(''),
+        true
+      )
+  }}
 # Skip TLS verification for self-signed certificates (e.g. GitLab)
 talos_fluxcd_git_insecure: '{{ global_talos_cluster.fluxcd.git_insecure | default(false) | bool }}'
 

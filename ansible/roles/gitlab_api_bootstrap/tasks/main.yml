@@ -3,184 +3,18 @@
 
 - name: Display API bootstrap info
   ansible.builtin.debug:
-    msg: "Bootstrapping GitLab resources via API"
-
-- name: Wait for GitLab API to be fully ready
-  ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/version"
-    method: GET
-    validate_certs: "{{ gitlab_ssl_verify }}"
-    return_content: true
-    status_code: [200, 401] # 401 is OK - means GitLab is responding, just needs auth
-  register: gitlab_ready
-  retries: 30
-  delay: 15
-  until: gitlab_ready.status in [200, 401]
-  failed_when: false
-
-- name: Fail if GitLab API is not responding
-  ansible.builtin.fail:
-    msg: |
-      GitLab API is not responding after waiting 7.5 minutes.
-      URL: {{ gitlab_api_url }}/api/v4/version
-      Last status: {{ gitlab_ready.status | default('unknown') }}
-      Check: sudo systemctl status gitlab nginx
-  when: gitlab_ready.status | default(0) not in [200, 401]
+    msg: 'Bootstrapping GitLab resources via API'
 
 # ===============================================
-# Validate existing token from vault first
+# Token lifecycle (validate / generate / persist)
 # ===============================================
-- name: Check if API token is provided in vault
-  ansible.builtin.set_fact:
-    gitlab_vault_token: '{{ gitlab_api_token | default("") }}'
-    gitlab_has_vault_token: '{{ (gitlab_api_token | default("") | length) > 0 }}'
-
-- name: Validate vault token with GitLab API
-  ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/user"
-    method: GET
-    validate_certs: "{{ gitlab_ssl_verify }}"
-    headers:
-      PRIVATE-TOKEN: "{{ gitlab_vault_token }}"
-    return_content: true
-    status_code: [200, 401, 403]
-  register: vault_token_check
-  when: gitlab_has_vault_token | bool
-  failed_when: false
-
-- name: Set token status based on validation
-  ansible.builtin.set_fact:
-    gitlab_has_valid_token: "{{ gitlab_has_vault_token and (vault_token_check.status | default(0)) == 200 }}"
-    gitlab_token_invalid_reason: >-
-      {{ 'No token in vault' if not gitlab_has_vault_token
-         else ('Token valid' if (vault_token_check.status | default(0)) == 200
-               else 'Token returned ' + (vault_token_check.status | default(0) | string) + ' - likely fresh install or token revoked') }}
-
-- name: Display token status
-  ansible.builtin.debug:
-    msg: "{{ gitlab_token_invalid_reason }}"
-
-# ===============================================
-# Generate new API token if needed
-# ===============================================
-- name: Create initial API token via Rails console (no valid token)
-  when: not gitlab_has_valid_token | bool
-  block:
-    - name: Wait for root user to exist (database init)
-      ansible.builtin.shell: |
-        gitlab-rails runner "
-          user = User.find_by(username: 'root')
-          if user
-            puts 'ROOT_OK'
-            exit 0
-          else
-            puts 'ROOT_MISSING'
-            exit 1
-          end
-        "
-      register: root_user_check
-      retries: 12
-      delay: 15
-      until: root_user_check.rc == 0
-      changed_when: false
-      failed_when: false
-      become: true
-      become_user: gitlab
-      environment:
-        HOME: "/var/lib/gitlab"
-        RAILS_ENV: "production"
-
-    - name: Delete any existing ansible-bootstrap token first
-      ansible.builtin.shell: |
-        gitlab-rails runner "
-          user = User.find_by(username: 'root')
-          if user
-            user.personal_access_tokens.where(name: 'ansible-bootstrap').destroy_all
-          end
-        " 2>&1
-      register: delete_old_token
-      changed_when: false
-      failed_when: false
-      become: true
-      become_user: gitlab
-      environment:
-        HOME: "/var/lib/gitlab"
-        RAILS_ENV: "production"
-
-    - name: Generate new API token via GitLab Rails console
-      ansible.builtin.shell: |
-        gitlab-rails runner "
-          user = User.find_by(username: 'root')
-          if user.nil?
-            STDERR.puts 'ERROR: root user not found'
-            exit 1
-          end
-          token = user.personal_access_tokens.create!(
-            name: 'ansible-bootstrap',
-            scopes: [:api, :read_user, :read_repository, :write_repository, :sudo],
-            expires_at: 1.year.from_now
-          )
-          # Print with unique prefix to extract reliably
-          puts 'GENERATED_TOKEN:' + token.token
-        " 2>/dev/null | grep '^GENERATED_TOKEN:' | cut -d: -f2
-      register: generated_token
-      changed_when: generated_token.stdout | trim | regex_search('^glpat-') | default(false) | bool
-      failed_when: generated_token.rc != 0 or generated_token.stdout | trim | length < 20
-      become: true
-      become_user: gitlab
-      environment:
-        HOME: "/var/lib/gitlab"
-        RAILS_ENV: "production"
-
-    - name: Validate generated token format
-      ansible.builtin.assert:
-        that:
-          - generated_token.stdout | trim is match('^glpat-')
-        fail_msg: |
-          Generated token doesn't look valid: {{ generated_token.stdout | trim }}
-          Expected format: glpat-XXXXXXXXXXXXXXXXXXXX
-        success_msg: "Token generated successfully: {{ generated_token.stdout | trim | truncate(15, True, '...') }}"
-
-    - name: Set API token from generated value
-      ansible.builtin.set_fact:
-        gitlab_api_token: "{{ generated_token.stdout | trim }}"
-        gitlab_has_valid_token: true
-        gitlab_token_just_generated: true
-
-    - name: Display generated token (truncated)
-      ansible.builtin.debug:
-        msg: "Generated API token: {{ gitlab_api_token[:10] }}... ({{ gitlab_api_token | length }} chars)"
-
-# Save newly generated token to vault (MUST be outside block to avoid condition inheritance)
-- name: Save GitLab API token to SOPS
-  ansible.builtin.include_role:
-    name: sops_write
-  vars:
-    new_secrets:
-      gitlab:
-        api_token: "{{ gitlab_api_token }}"
-        api_token_created: "{{ ansible_date_time.iso8601 }}"
-        admin_username: "root"
-        admin_password: "{{ gitlab_root_password }}"
-        admin_email: "{{ gitlab_root_email }}"
-        url: "{{ gitlab_external_url }}"
-        api_url: "{{ gitlab_api_url }}"
-  when: gitlab_token_just_generated | default(false) | bool
-
-- name: Display token saved confirmation
-  ansible.builtin.debug:
-    msg:
-      - "API token generated and saved to vault!"
-      - "Token will be used for subsequent API operations"
-  when: gitlab_token_just_generated | default(false) | bool
-
-- name: Set final token validity
-  ansible.builtin.set_fact:
-    gitlab_token_valid: "{{ gitlab_has_valid_token | bool }}"
-
-- name: Display final token status
-  ansible.builtin.debug:
-    msg: '{{ "API token is VALID - proceeding with API operations" if gitlab_token_valid else "API token INVALID - API operations will be skipped" }}'
+- name: Include GitLab API token lifecycle
+  ansible.builtin.include_tasks: token_lifecycle.yml
+  tags:
+    - gitlab_token
+    - gitlab_token_check
+    - gitlab_token_generate
+    - gitlab_token_persist
 
 # ===============================================
 # Enforce application settings via API
@@ -190,20 +24,20 @@
 
 - name: Enforce application settings via API
   ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/application/settings"
+    url: '{{ gitlab_api_url }}/api/v4/application/settings'
     method: PUT
-    validate_certs: "{{ gitlab_ssl_verify }}"
+    validate_certs: '{{ gitlab_ssl_verify }}'
     headers:
-      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+      PRIVATE-TOKEN: '{{ gitlab_api_token }}'
     body_format: json
     body:
-      signup_enabled: "{{ gitlab_signup_enabled | default(false) }}"
+      signup_enabled: '{{ gitlab_signup_enabled | default(false) }}'
       # Allow requests to private/local network IPs from web hooks and services.
       # Without this, CI runners on private networks get 409 Conflict because the
       # runner session URL (private IP) fails PublicUrlValidator validation during
       # the pending→running state transition in Ci::Build.
-      allow_local_requests_from_web_hooks_and_services: "{{ gitlab_allow_local_requests_from_webhooks | default(true) }}"
-      allow_local_requests_from_system_hooks: "{{ gitlab_allow_local_requests_from_system_hooks | default(true) }}"
+      allow_local_requests_from_web_hooks_and_services: '{{ gitlab_allow_local_requests_from_webhooks | default(true) }}'
+      allow_local_requests_from_system_hooks: '{{ gitlab_allow_local_requests_from_system_hooks | default(true) }}'
     status_code: [200]
     return_content: true
   register: gitlab_app_settings
@@ -230,11 +64,11 @@
 # ===============================================
 - name: Fetch existing GitLab groups
   ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/groups?per_page=100"
+    url: '{{ gitlab_api_url }}/api/v4/groups?per_page=100'
     method: GET
-    validate_certs: "{{ gitlab_ssl_verify }}"
+    validate_certs: '{{ gitlab_ssl_verify }}'
     headers:
-      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+      PRIVATE-TOKEN: '{{ gitlab_api_token }}'
     return_content: true
     status_code: 200
   register: gitlab_groups_existing
@@ -254,19 +88,19 @@
 # Create groups
 - name: Create GitLab groups
   ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/groups"
+    url: '{{ gitlab_api_url }}/api/v4/groups'
     method: POST
-    validate_certs: "{{ gitlab_ssl_verify }}"
+    validate_certs: '{{ gitlab_ssl_verify }}'
     headers:
-      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+      PRIVATE-TOKEN: '{{ gitlab_api_token }}'
     body_format: json
     body:
-      name: "{{ item.name }}"
-      path: "{{ item.path | default(item.name) }}"
+      name: '{{ item.name }}'
+      path: '{{ item.path | default(item.name) }}'
       description: '{{ item.description | default("") }}'
       visibility: '{{ item.visibility | default("private") }}'
     status_code: [201, 400]
-  loop: "{{ gitlab_groups | default(gitlab_default_groups | default([])) }}"
+  loop: '{{ gitlab_groups | default(gitlab_default_groups | default([])) }}'
   when:
     - gitlab_token_valid | bool
   register: group_creation
@@ -274,11 +108,11 @@
 
 - name: Refresh group id map
   ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/groups?per_page=100"
+    url: '{{ gitlab_api_url }}/api/v4/groups?per_page=100'
     method: GET
-    validate_certs: "{{ gitlab_ssl_verify }}"
+    validate_certs: '{{ gitlab_ssl_verify }}'
     headers:
-      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+      PRIVATE-TOKEN: '{{ gitlab_api_token }}'
     return_content: true
     status_code: 200
   register: gitlab_groups_existing_after
@@ -305,20 +139,20 @@
 # Create projects
 - name: Create GitLab projects
   ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/projects"
+    url: '{{ gitlab_api_url }}/api/v4/projects'
     method: POST
-    validate_certs: "{{ gitlab_ssl_verify }}"
+    validate_certs: '{{ gitlab_ssl_verify }}'
     headers:
-      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+      PRIVATE-TOKEN: '{{ gitlab_api_token }}'
     body_format: json
     body:
-      name: "{{ item.name }}"
-      namespace_id: "{{ gitlab_group_id_map[item.namespace] | default(omit) }}"
+      name: '{{ item.name }}'
+      namespace_id: '{{ gitlab_group_id_map[item.namespace] | default(omit) }}'
       description: '{{ item.description | default("") }}'
       visibility: '{{ item.visibility | default("private") }}'
-      initialize_with_readme: "{{ item.initialize_with_readme | default(false) }}"
+      initialize_with_readme: '{{ item.initialize_with_readme | default(false) }}'
     status_code: [201, 400]
-  loop: "{{ gitlab_projects | default([]) }}"
+  loop: '{{ gitlab_projects | default([]) }}'
   when:
     - gitlab_token_valid | bool
     - gitlab_projects | default([]) | length > 0
@@ -351,9 +185,9 @@
            )
          })
       }}
-  loop: "{{ gitlab_users | default([]) }}"
+  loop: '{{ gitlab_users | default([]) }}'
   loop_control:
-    label: "{{ item.username }}"
+    label: '{{ item.username }}'
   no_log: true
   when:
     - gitlab_token_valid | bool
@@ -365,7 +199,7 @@
   vars:
     new_secrets:
       gitlab:
-        user_passwords: "{{ _gitlab_user_passwords }}"
+        user_passwords: '{{ _gitlab_user_passwords }}'
   when:
     - gitlab_token_valid | bool
     - _gitlab_user_passwords | default({}) | length > 0
@@ -385,22 +219,22 @@
 # Create users
 - name: Create GitLab users
   ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/users"
+    url: '{{ gitlab_api_url }}/api/v4/users'
     method: POST
-    validate_certs: "{{ gitlab_ssl_verify }}"
+    validate_certs: '{{ gitlab_ssl_verify }}'
     headers:
-      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+      PRIVATE-TOKEN: '{{ gitlab_api_token }}'
     body_format: json
     body:
-      email: "{{ item.email }}"
-      username: "{{ item.username }}"
-      name: "{{ item.name | default(item.username) }}"
-      password: "{{ _gitlab_user_passwords[item.username] }}"
+      email: '{{ item.email }}'
+      username: '{{ item.username }}'
+      name: '{{ item.name | default(item.username) }}'
+      password: '{{ _gitlab_user_passwords[item.username] }}'
       skip_confirmation: true
-      admin: "{{ item.admin | default(false) }}"
-      projects_limit: "{{ item.projects_limit | default(10) }}"
+      admin: '{{ item.admin | default(false) }}'
+      projects_limit: '{{ item.projects_limit | default(10) }}'
     status_code: [201, 409]
-  loop: "{{ gitlab_users | default([]) }}"
+  loop: '{{ gitlab_users | default([]) }}'
   when:
     - gitlab_token_valid | bool
     - gitlab_users | default([]) | length > 0
@@ -414,7 +248,7 @@
       FAILED to create user '{{ item.item.username }}' —
       HTTP {{ item.status | default("?") }}:
       {{ item.json.message | default(item.json.error | default("unknown error")) }}
-  loop: "{{ user_creation.results | default([]) }}"
+  loop: '{{ user_creation.results | default([]) }}'
   loop_control:
     label: '{{ item.item.username | default("unknown") }}'
   when:
@@ -444,17 +278,17 @@
 
 - name: Resolve GitLab user IDs via API
   ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/users?username={{ item.username }}"
+    url: '{{ gitlab_api_url }}/api/v4/users?username={{ item.username }}'
     method: GET
-    validate_certs: "{{ gitlab_ssl_verify }}"
+    validate_certs: '{{ gitlab_ssl_verify }}'
     headers:
-      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+      PRIVATE-TOKEN: '{{ gitlab_api_token }}'
     return_content: true
     status_code: [200]
     timeout: 30
-  loop: "{{ gitlab_users | default([]) }}"
+  loop: '{{ gitlab_users | default([]) }}'
   loop_control:
-    label: "{{ item.username }}"
+    label: '{{ item.username }}'
   register: _gitlab_user_lookups
   retries: 5
   delay: 15
@@ -472,7 +306,7 @@
           item.item.username: (item.json | default([]) | first | default({})).id | default(0) | int
         })
       }}
-  loop: "{{ _gitlab_user_lookups.results | default([]) }}"
+  loop: '{{ _gitlab_user_lookups.results | default([]) }}'
   loop_control:
     label: '{{ item.item.username | default("unknown") }}'
   when:
@@ -482,21 +316,21 @@
 
 - name: Display resolved user IDs
   ansible.builtin.debug:
-    msg: "Resolved user IDs: {{ gitlab_user_id_map | default({}) }}"
+    msg: 'Resolved user IDs: {{ gitlab_user_id_map | default({}) }}'
   when: gitlab_token_valid | bool
 
 # Add users to groups (optional)
 - name: Add users to groups
   ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/groups/{{ gitlab_group_id_map[item.1.group] }}/members"
+    url: '{{ gitlab_api_url }}/api/v4/groups/{{ gitlab_group_id_map[item.1.group] }}/members'
     method: POST
-    validate_certs: "{{ gitlab_ssl_verify }}"
+    validate_certs: '{{ gitlab_ssl_verify }}'
     headers:
-      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+      PRIVATE-TOKEN: '{{ gitlab_api_token }}'
     body_format: json
     body:
-      user_id: "{{ gitlab_user_id_map[item.0.username] }}"
-      access_level: "{{ item.1.access_level | default(30) }}"
+      user_id: '{{ gitlab_user_id_map[item.0.username] }}'
+      access_level: '{{ item.1.access_level | default(30) }}'
     status_code: [201, 409, 404]
   loop: '{{ gitlab_users | default([]) | subelements("groups", skip_missing=True) }}'
   when:
@@ -519,15 +353,15 @@
 
 - name: Upload SSH keys for users
   ansible.builtin.uri:
-    url: "{{ gitlab_api_url }}/api/v4/users/{{ gitlab_user_id_map[item.0.username] }}/keys"
+    url: '{{ gitlab_api_url }}/api/v4/users/{{ gitlab_user_id_map[item.0.username] }}/keys'
     method: POST
-    validate_certs: "{{ gitlab_ssl_verify }}"
+    validate_certs: '{{ gitlab_ssl_verify }}'
     headers:
-      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+      PRIVATE-TOKEN: '{{ gitlab_api_token }}'
     body_format: json
     body:
       title: '{{ item.1.title | default("Ansible managed key") }}'
-      key: "{{ item.1.key }}"
+      key: '{{ item.1.key }}'
     status_code: [201, 400, 409]
   loop: '{{ gitlab_users | default([]) | subelements("ssh_keys", skip_missing=True) }}'
   when:
@@ -549,16 +383,16 @@
 - name: Display manual setup instructions
   ansible.builtin.debug:
     msg:
-      - "========================================="
-      - "GitLab API Bootstrap Complete"
-      - "========================================="
-      - ""
-      - "If API token was not set, complete setup manually:"
-      - "1. Login to GitLab: {{ gitlab_external_url }}"
+      - '========================================='
+      - 'GitLab API Bootstrap Complete'
+      - '========================================='
+      - ''
+      - 'If API token was not set, complete setup manually:'
+      - '1. Login to GitLab: {{ gitlab_external_url }}'
       - '2. Create groups: {{ gitlab_groups | map(attribute="name") | join(", ") }}'
       - '3. Create projects: {{ gitlab_projects | map(attribute="name") | join(", ") }}'
       - '4. Create users: {{ gitlab_users | map(attribute="username") | join(", ") }}'
-      - ""
-      - "Generate API token: {{ gitlab_external_url }}/-/profile/personal_access_tokens"
-      - "========================================="
+      - ''
+      - 'Generate API token: {{ gitlab_external_url }}/-/profile/personal_access_tokens'
+      - '========================================='
   when: not gitlab_token_valid | default(false) | bool

@@ -1,0 +1,183 @@
+---
+# GitLab API token lifecycle only (no groups/projects/users provisioning)
+# Safe to reuse from other stages (e.g. Stage 5 preflight).
+
+- name: Display API token lifecycle info
+  ansible.builtin.debug:
+    msg: 'Ensuring GitLab API token is present and valid'
+
+- name: Wait for GitLab API to be fully ready
+  ansible.builtin.uri:
+    url: '{{ gitlab_api_url }}/api/v4/version'
+    method: GET
+    validate_certs: '{{ gitlab_ssl_verify }}'
+    return_content: true
+    status_code: [200, 401] # 401 is OK - means GitLab is responding, just needs auth
+  register: gitlab_ready
+  retries: 30
+  delay: 15
+  until: gitlab_ready.status in [200, 401]
+  failed_when: false
+
+- name: Fail if GitLab API is not responding
+  ansible.builtin.fail:
+    msg: |
+      GitLab API is not responding after waiting 7.5 minutes.
+      URL: {{ gitlab_api_url }}/api/v4/version
+      Last status: {{ gitlab_ready.status | default('unknown') }}
+      Check: sudo systemctl status gitlab nginx
+  when: gitlab_ready.status | default(0) not in [200, 401]
+
+# ===============================================
+# Validate existing token from vault/SOPS-derived vars first
+# ===============================================
+- name: Check if API token is provided in variables
+  ansible.builtin.set_fact:
+    gitlab_vault_token: '{{ gitlab_api_token | default("") }}'
+    gitlab_has_vault_token: '{{ (gitlab_api_token | default("") | length) > 0 }}'
+
+- name: Validate existing token with GitLab API
+  ansible.builtin.uri:
+    url: '{{ gitlab_api_url }}/api/v4/user'
+    method: GET
+    validate_certs: '{{ gitlab_ssl_verify }}'
+    headers:
+      PRIVATE-TOKEN: '{{ gitlab_vault_token }}'
+    return_content: true
+    status_code: [200, 401, 403]
+  register: vault_token_check
+  when: gitlab_has_vault_token | bool
+  failed_when: false
+
+- name: Set token status based on validation
+  ansible.builtin.set_fact:
+    gitlab_has_valid_token: '{{ gitlab_has_vault_token and (vault_token_check.status | default(0)) == 200 }}'
+    gitlab_token_invalid_reason: >-
+      {{ 'No token in variables' if not gitlab_has_vault_token
+         else ('Token valid' if (vault_token_check.status | default(0)) == 200
+               else 'Token returned ' + (vault_token_check.status | default(0) | string) + ' - likely fresh install or token revoked') }}
+
+- name: Display token status
+  ansible.builtin.debug:
+    msg: '{{ gitlab_token_invalid_reason }}'
+
+# ===============================================
+# Generate new API token if needed
+# ===============================================
+- name: Create initial API token via Rails console (no valid token)
+  when: not gitlab_has_valid_token | bool
+  block:
+    - name: Wait for root user to exist (database init)
+      ansible.builtin.shell: |
+        gitlab-rails runner "
+          user = User.find_by(username: 'root')
+          if user
+            puts 'ROOT_OK'
+            exit 0
+          else
+            puts 'ROOT_MISSING'
+            exit 1
+          end
+        "
+      register: root_user_check
+      retries: 12
+      delay: 15
+      until: root_user_check.rc == 0
+      changed_when: false
+      failed_when: false
+      become: true
+      become_user: gitlab
+      environment:
+        HOME: '/var/lib/gitlab'
+        RAILS_ENV: 'production'
+
+    - name: Delete any existing ansible-bootstrap token first
+      ansible.builtin.shell: |
+        gitlab-rails runner "
+          user = User.find_by(username: 'root')
+          if user
+            user.personal_access_tokens.where(name: 'ansible-bootstrap').destroy_all
+          end
+        " 2>&1
+      register: delete_old_token
+      changed_when: false
+      failed_when: false
+      become: true
+      become_user: gitlab
+      environment:
+        HOME: '/var/lib/gitlab'
+        RAILS_ENV: 'production'
+
+    - name: Generate new API token via GitLab Rails console
+      ansible.builtin.shell: |
+        gitlab-rails runner "
+          user = User.find_by(username: 'root')
+          if user.nil?
+            STDERR.puts 'ERROR: root user not found'
+            exit 1
+          end
+          token = user.personal_access_tokens.create!(
+            name: 'ansible-bootstrap',
+            scopes: [:api, :read_user, :read_repository, :write_repository, :sudo],
+            expires_at: 1.year.from_now
+          )
+          # Print with unique prefix to extract reliably
+          puts 'GENERATED_TOKEN:' + token.token
+        " 2>/dev/null | grep '^GENERATED_TOKEN:' | cut -d: -f2
+      register: generated_token
+      changed_when: generated_token.stdout | trim | regex_search('^glpat-') | default(false) | bool
+      failed_when: generated_token.rc != 0 or generated_token.stdout | trim | length < 20
+      become: true
+      become_user: gitlab
+      environment:
+        HOME: '/var/lib/gitlab'
+        RAILS_ENV: 'production'
+
+    - name: Validate generated token format
+      ansible.builtin.assert:
+        that:
+          - generated_token.stdout | trim is match('^glpat-')
+        fail_msg: |
+          Generated token doesn't look valid: {{ generated_token.stdout | trim }}
+          Expected format: glpat-XXXXXXXXXXXXXXXXXXXX
+        success_msg: "Token generated successfully: {{ generated_token.stdout | trim | truncate(15, True, '...') }}"
+
+    - name: Set API token from generated value
+      ansible.builtin.set_fact:
+        gitlab_api_token: '{{ generated_token.stdout | trim }}'
+        gitlab_has_valid_token: true
+        gitlab_token_just_generated: true
+
+    - name: Display generated token (truncated)
+      ansible.builtin.debug:
+        msg: 'Generated API token: {{ gitlab_api_token[:10] }}... ({{ gitlab_api_token | length }} chars)'
+
+- name: Save GitLab API token to SOPS
+  ansible.builtin.include_role:
+    name: sops_write
+  vars:
+    new_secrets:
+      gitlab:
+        api_token: '{{ gitlab_api_token }}'
+        api_token_created: '{{ ansible_date_time.iso8601 }}'
+        admin_username: 'root'
+        admin_password: '{{ gitlab_root_password }}'
+        admin_email: '{{ gitlab_root_email }}'
+        url: '{{ gitlab_external_url }}'
+        api_url: '{{ gitlab_api_url }}'
+  when: gitlab_token_just_generated | default(false) | bool
+
+- name: Display token saved confirmation
+  ansible.builtin.debug:
+    msg:
+      - 'API token generated and saved to vault!'
+      - 'Token will be used for subsequent API operations'
+  when: gitlab_token_just_generated | default(false) | bool
+
+- name: Set final token validity
+  ansible.builtin.set_fact:
+    gitlab_token_valid: '{{ gitlab_has_valid_token | bool }}'
+
+- name: Display final token status
+  ansible.builtin.debug:
+    msg: '{{ "API token is VALID" if gitlab_token_valid else "API token INVALID" }}'

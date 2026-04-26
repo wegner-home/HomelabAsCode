@@ -14,12 +14,32 @@
 # When standalone: provide via inventory or extra-vars
 gitlab_api_url: 'https://{{ ansible_host | default(ansible_default_ipv4.address) }}'
 gitlab_ssl_verify: false
-gitlab_api_token: '{{ vault_secrets.gitlab.api_token | default("") }}'
+gitlab_api_token: >-
+	{{
+		(lookup('community.sops.sops', global_sops_runtime_file, output_type='json', empty_on_not_exist=true)
+			| default('{}', true) | from_json).gitlab.api_token
+		| default(
+				(lookup('community.sops.sops', global_sops_secrets_file, output_type='json')
+					| from_json).vault_secrets.gitlab.api_token
+				| default(''),
+				true
+			)
+	}}
 
 # ===============================================
 # Credentials (for vault persistence)
 # ===============================================
-gitlab_root_password: '{{ vault_secrets.gitlab.root_password | default("") }}'
+gitlab_root_password: >-
+	{{
+		(lookup('community.sops.sops', global_sops_runtime_file, output_type='json', empty_on_not_exist=true)
+			| default('{}', true) | from_json).gitlab.admin_password
+		| default(
+				(lookup('community.sops.sops', global_sops_secrets_file, output_type='json')
+					| from_json).vault_secrets.gitlab.root_password
+				| default(''),
+				true
+			)
+	}}
 gitlab_root_email: 'admin@{{ global_domain }}'
 gitlab_external_url: 'https://{{ inventory_hostname }}.{{ global_domain }}'
 

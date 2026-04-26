@@ -114,7 +114,7 @@
 
 - name: Warn if sops is not installed
   ansible.builtin.debug:
-    msg: "WARNING: sops is not installed but sops_encrypt is enabled. Secrets will NOT be encrypted."
+    msg: 'WARNING: sops is not installed but sops_encrypt is enabled. Secrets will NOT be encrypted.'
   when:
     - talos_sops_encrypt | bool
     - _sops_version.rc | default(1) != 0
@@ -139,6 +139,7 @@
       but found {{ talos_controlplane_ips | length }}.
       Ensure host_vars exist for all CP nodes and they are in the talos_control_plane group.
     quiet: true
+  when: talos_strict_inventory_counts | bool
 
 - name: Collect worker IPs from host_vars
   ansible.builtin.set_fact:
@@ -163,15 +164,17 @@
       but found {{ talos_worker_ips | length }}.
       Ensure host_vars exist for all worker nodes and they are in the talos_workers group.
     quiet: true
-  when: talos_worker_count | int > 0
+  when:
+    - talos_worker_count | int > 0
+    - talos_strict_inventory_counts | bool
 
 - name: Compute all node IPs
   ansible.builtin.set_fact:
-    talos_all_node_ips: "{{ talos_controlplane_ips + talos_worker_ips }}"
+    talos_all_node_ips: '{{ talos_controlplane_ips + talos_worker_ips }}'
 
 - name: Set first control plane IP (bootstrap node)
   ansible.builtin.set_fact:
-    talos_bootstrap_node_ip: "{{ talos_controlplane_ips[0] }}"
+    talos_bootstrap_node_ip: '{{ talos_controlplane_ips[0] }}'
 
 # ===============================================
 # Validate Cluster Configuration
@@ -232,11 +235,11 @@
 # ===============================================
 - name: Ensure artifact output directory exists
   ansible.builtin.file:
-    path: "{{ talos_output_dir }}"
+    path: '{{ talos_output_dir }}'
     state: directory
-    mode: "0700"
-    owner: "{{ ansible_user_id }}"
-    group: "{{ ansible_user_gid }}"
+    mode: '0700'
+    owner: '{{ ansible_user_id }}'
+    group: '{{ ansible_user_gid }}'
 
 # ===============================================
 # Discovery Summary
@@ -244,28 +247,28 @@
 - name: Display pre-flight summary
   ansible.builtin.debug:
     msg:
-      - "--- Pre-flight Summary ---"
-      - "talosctl: v{{ _talosctl_ver }}"
-      - "kubectl:  v{{ _kubectl_ver }}"
-      - "Bootstrap mode: {{ talos_bootstrap_mode }}"
-      - "Bootstrap node: {{ talos_bootstrap_node_ip }}"
+      - '--- Pre-flight Summary ---'
+      - 'talosctl: v{{ _talosctl_ver }}'
+      - 'kubectl:  v{{ _kubectl_ver }}'
+      - 'Bootstrap mode: {{ talos_bootstrap_mode }}'
+      - 'Bootstrap node: {{ talos_bootstrap_node_ip }}'
       - 'Control plane IPs: {{ talos_controlplane_ips | join(", ") }}'
       - 'Worker IPs: {{ talos_worker_ips | join(", ") if talos_worker_ips | length > 0 else "none (single-node)" }}'
-      - "Cluster endpoint: {{ talos_cluster_endpoint }}"
+      - 'Cluster endpoint: {{ talos_cluster_endpoint }}'
       - 'VIP: {{ talos_vip_ip if talos_vip_enabled else "disabled" }}'
-      - "Output dir: {{ talos_output_dir }}"
+      - 'Output dir: {{ talos_output_dir }}'
 
 # ===============================================
 # Wait for Nodes (bootstrap/upgrade only)
 # ===============================================
 - name: Wait for Talos API to be reachable on all nodes
   ansible.builtin.wait_for:
-    host: "{{ item }}"
-    port: "{{ talos_api_port }}"
-    timeout: "{{ talos_wait_timeout }}"
-    delay: "{{ talos_wait_delay }}"
+    host: '{{ item }}'
+    port: '{{ talos_api_port }}'
+    timeout: '{{ talos_wait_timeout }}'
+    delay: '{{ talos_wait_delay }}'
     state: started
-  loop: "{{ talos_all_node_ips }}"
+  loop: '{{ talos_all_node_ips }}'
   loop_control:
-    label: "{{ item }}:{{ talos_api_port }}"
+    label: '{{ item }}:{{ talos_api_port }}'
   when: talos_bootstrap_mode in ['bootstrap', 'upgrade']
