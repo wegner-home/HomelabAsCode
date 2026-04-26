@@ -31,6 +31,7 @@ Roles used:
 - `bootstrap_localhost`
 - `ssh_user`
 - `sops_age`
+- `cf_cert`
 
 ### _Ansible_ Stage 1 - Bootstrap Proxmox
 

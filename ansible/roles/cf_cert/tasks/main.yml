@@ -1,0 +1,101 @@
+---
+# Cloudflare Origin Certificate
+# ===============================================
+# Requests a Cloudflare Origin CA certificate for global_domain and
+# persists the material into runtime_secrets.sops.yaml via sops_write.
+
+- name: Skip Cloudflare certificate request when feature is disabled
+  ansible.builtin.debug:
+    msg: 'Cloudflare certificate request is disabled (global_cf_cert_enabled=false).'
+  when: not (cf_cert_enabled | bool)
+
+- name: Request and persist Cloudflare Origin certificate
+  when: cf_cert_enabled | bool
+  block:
+    - name: Validate Cloudflare API token is configured
+      ansible.builtin.assert:
+        that:
+          - cf_cert_cloudflare_api_token | length > 0
+        fail_msg: >-
+          Cloudflare certificate request is enabled, but no API token was found.
+          Set vault_secrets.cloudflare.api_token in your SOPS secrets.
+        quiet: true
+
+    - name: Check whether certificate already exists in merged vault secrets
+      ansible.builtin.set_fact:
+        _cf_cert_exists: >-
+          {{
+            (
+              vault_secrets.cloudflare.origin_cert is defined
+              and vault_secrets.cloudflare.origin_cert | length > 0
+              and vault_secrets.cloudflare.origin_key is defined
+              and vault_secrets.cloudflare.origin_key | length > 0
+            )
+          }}
+
+    - name: Request Cloudflare Origin certificate
+      ansible.builtin.uri:
+        url: '{{ cf_cert_api_url }}'
+        method: POST
+        headers:
+          Authorization: 'Bearer {{ cf_cert_cloudflare_api_token }}'
+          Content-Type: 'application/json'
+        body_format: json
+        body:
+          hostnames: '{{ cf_cert_hostnames }}'
+          requested_validity: '{{ cf_cert_requested_validity | int }}'
+          request_type: '{{ cf_cert_request_type }}'
+        status_code: 200
+        return_content: true
+      register: _cf_cert_request
+      no_log: true
+      when:
+        - cf_cert_force_renew | bool or not _cf_cert_exists | bool
+
+    - name: Validate Cloudflare API response
+      ansible.builtin.assert:
+        that:
+          - _cf_cert_request.json.success | default(false) | bool
+          - _cf_cert_request.json.result.certificate is defined
+          - _cf_cert_request.json.result.private_key is defined
+        fail_msg: >-
+          Cloudflare certificate request failed.
+          API errors: {{ _cf_cert_request.json.errors | default(_cf_cert_request.content | default('unknown error')) }}
+        quiet: true
+      when:
+        - _cf_cert_request is defined
+        - _cf_cert_request is not skipped
+
+    - name: Build runtime secrets payload for Cloudflare cert
+      ansible.builtin.set_fact:
+        new_secrets: >-
+          {{
+            {
+              'cloudflare': {
+                'origin_cert': _cf_cert_request.json.result.certificate,
+                'origin_key': _cf_cert_request.json.result.private_key,
+                'origin_issuer': _cf_cert_request.json.result.issuer,
+                'origin_expires_on': _cf_cert_request.json.result.expires_on,
+                'origin_hostnames': cf_cert_hostnames,
+                'origin_requested_at': ansible_date_time.iso8601
+              }
+            }
+          }}
+      no_log: true
+      when:
+        - _cf_cert_request is defined
+        - _cf_cert_request is not skipped
+
+    - name: Persist Cloudflare certificate secrets to SOPS runtime file
+      ansible.builtin.include_role:
+        name: sops_write
+      when: new_secrets is defined and new_secrets | length > 0
+
+    - name: Reuse existing Cloudflare certificate from vault/runtime secrets
+      ansible.builtin.debug:
+        msg: >-
+          Cloudflare certificate already present in secrets.
+          Skipping request (set global_cf_cert_force_renew=true to re-issue).
+      when:
+        - _cf_cert_exists | bool
+        - not (cf_cert_force_renew | bool)

@@ -1,0 +1,20 @@
+---
+# defaults for cf_cert role
+
+# Global toggle (intended to be configured in inventory/group_vars/all.yml)
+cf_cert_enabled: '{{ global_cf_cert_enabled | default(false) }}'
+
+# Certificate request settings
+cf_cert_domain: '{{ global_domain }}'
+cf_cert_hostnames:
+  - '{{ cf_cert_domain }}'
+  - '*.{{ cf_cert_domain }}'
+cf_cert_requested_validity: '{{ global_cf_cert_requested_validity | default(5475) }}'
+cf_cert_request_type: "{{ global_cf_cert_request_type | default('origin-rsa') }}"
+cf_cert_force_renew: '{{ global_cf_cert_force_renew | default(false) }}'
+
+# Secret mapping
+cf_cert_cloudflare_api_token: "{{ vault_secrets.cloudflare.api_token | default('') }}"
+
+# Cloudflare Origin CA API endpoint
+cf_cert_api_url: 'https://api.cloudflare.com/client/v4/certificates'

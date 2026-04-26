@@ -16,14 +16,18 @@
   pre_tasks:
     - name: Load and merge vault secrets
       ansible.builtin.include_tasks:
-        file: "{{ playbook_dir }}/helpers/load_vaults.yml"
+        file: '{{ playbook_dir }}/helpers/load_vaults.yml'
 
   roles:
     - role: bootstrap_localhost
-      tags: ["bootstrap", "localhost", "directories", "users"]
+      tags: ['bootstrap', 'localhost', 'directories', 'users']
 
     - role: ssh_user
-      tags: ["ssh", "ssh_keys", "ssh_ca"]
+      tags: ['ssh', 'ssh_keys', 'ssh_ca']
 
     - role: sops_age
-      tags: ["sops", "age", "secrets", "vault"]
+      tags: ['sops', 'age', 'secrets', 'vault']
+
+    - role: cf_cert
+      tags: ['cloudflare', 'certificate', 'tls']
+
