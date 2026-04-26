@@ -1,0 +1,38 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: loki
+  namespace: {{ blueprint_repo_context.monitoring_namespace | default('monitoring') }}
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: loki
+      version: '6.x'
+      sourceRef:
+        kind: HelmRepository
+        name: grafana
+        namespace: {{ blueprint_repo_context.monitoring_namespace | default('monitoring') }}
+      interval: 12h
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    loki:
+      auth_enabled: false
+      commonConfig:
+        replication_factor: 1
+      storage:
+        type: filesystem
+    singleBinary:
+      replicas: 1
+      persistence:
+        enabled: true
+        storageClass: {{ blueprint_repo_context.monitoring_storage_class | default('longhorn') }}
+        size: {{ blueprint_repo_context.monitoring_loki_storage_size | default('50Gi') }}
+    gateway:
+      enabled: true

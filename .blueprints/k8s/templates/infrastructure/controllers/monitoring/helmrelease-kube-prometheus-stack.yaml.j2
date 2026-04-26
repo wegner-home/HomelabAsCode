@@ -1,0 +1,66 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-prometheus-stack
+  namespace: {{ blueprint_repo_context.monitoring_namespace | default('monitoring') }}
+spec:
+  interval: 30m
+  chart:
+    spec:
+      chart: kube-prometheus-stack
+      version: '69.x'
+      sourceRef:
+        kind: HelmRepository
+        name: prometheus-community
+        namespace: {{ blueprint_repo_context.monitoring_namespace | default('monitoring') }}
+      interval: 12h
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    grafana:
+      persistence:
+        enabled: true
+        type: pvc
+        storageClassName: {{ blueprint_repo_context.monitoring_storage_class | default('longhorn') }}
+        size: {{ blueprint_repo_context.monitoring_grafana_storage_size | default('10Gi') }}
+      ingress:
+        enabled: true
+        ingressClassName: {{ blueprint_repo_context.monitoring_ingress_class_name | default('traefik') }}
+        annotations:
+          cert-manager.io/cluster-issuer: {{ blueprint_repo_context.monitoring_tls_issuer | default('selfsigned-issuer') }}
+        hosts:
+          - {{ (blueprint_repo_context.monitoring_grafana_subdomain | default('grafana')) ~ '.' ~ (blueprint_repo_context.monitoring_domain | default('example.local')) }}
+        tls:
+          - secretName: grafana-tls
+            hosts:
+              - {{ (blueprint_repo_context.monitoring_grafana_subdomain | default('grafana')) ~ '.' ~ (blueprint_repo_context.monitoring_domain | default('example.local')) }}
+
+    prometheus:
+      prometheusSpec:
+        retention: 30d
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: {{ blueprint_repo_context.monitoring_storage_class | default('longhorn') }}
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: {{ blueprint_repo_context.monitoring_prometheus_storage_size | default('50Gi') }}
+
+    alertmanager:
+      alertmanagerSpec:
+        storage:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: {{ blueprint_repo_context.monitoring_storage_class | default('longhorn') }}
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: {{ blueprint_repo_context.monitoring_alertmanager_storage_size | default('10Gi') }}

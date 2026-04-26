@@ -370,6 +370,23 @@ global_talos_cluster:
       api_token_secret_name: 'cloudflare-api-token'
       api_token_secret_key: 'api-token'
 
+  # Cluster monitoring stack (Grafana + Prometheus + Loki)
+  # This is the intended scrape/visualization target for the NixOS monitoring module
+  # (node-exporter) from the nix-flakes blueprint.
+  monitoring:
+    enabled: true
+    namespace: 'monitoring'
+    storage_class: 'longhorn'
+    domain: '{{ global_talos_cluster.traefik.domain | default(global_domain) }}'
+    grafana_subdomain: 'grafana'
+    loki_subdomain: 'loki'
+    ingress_class_name: 'traefik'
+    tls_issuer: '' # auto-selects Cloudflare issuer when enabled, else selfsigned-issuer
+    prometheus_storage_size: '50Gi'
+    alertmanager_storage_size: '10Gi'
+    grafana_storage_size: '10Gi'
+    loki_storage_size: '50Gi'
+
   # Artifact storage
   artifacts:
     output_dir: '../config/k8s/talos'

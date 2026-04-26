@@ -8,7 +8,7 @@ This repository contains the FluxCD configuration for the Kubernetes cluster.
 ├── apps/                    # Application deployments
 │   └── base/               # Base app definitions (shared across envs)
 ├── infrastructure/          # Infrastructure components
-│   ├── controllers/        # HelmReleases for infra (Cilium, MetalLB, etc.)
+│   ├── controllers/        # HelmReleases for infra (Cilium, monitoring stack, etc.)
 │   └── configs/            # Post-install configs (IP pools, ingress, etc.)
 ├── clusters/               # Per-environment cluster definitions
 │   └── <env>/              # Environment-specific (dev, staging, production)
@@ -30,9 +30,11 @@ Clusters are organized by environment matching the `NIX_ENV` variable:
 | Component    | Purpose                    |
 | ------------ | -------------------------- |
 | Cilium       | CNI networking with eBPF   |
-| MetalLB      | Bare-metal load balancer   |
 | Traefik      | Ingress controller         |
 | cert-manager | TLS certificate automation |
+| Prometheus   | Metrics collection/storage |
+| Grafana      | Dashboards & alerting UI   |
+| Loki         | Log aggregation            |
 | SOPS         | Secret encryption with age |
 
 ## Usage

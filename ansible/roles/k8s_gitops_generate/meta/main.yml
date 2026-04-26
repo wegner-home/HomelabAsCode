@@ -4,7 +4,8 @@ galaxy_info:
   description: >-
     Generates a FluxCD GitOps repository structure from Ansible inventory
     using the blueprint_repo role. Renders cluster manifests for Cilium,
-    cert-manager, Traefik, and SOPS secrets operator
+    cert-manager, Traefik, kube-prometheus-stack, Loki,
+    and SOPS secrets operator
     via the blueprints/k8s/ blueprint.
   license: MIT
   min_ansible_version: '2.14'

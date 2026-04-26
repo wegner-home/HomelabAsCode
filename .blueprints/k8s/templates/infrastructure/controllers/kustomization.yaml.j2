@@ -7,4 +7,7 @@ resources:
 {% if blueprint_repo_context.traefik_enabled | default(true) | bool %}
   - traefik
 {% endif %}
+{% if blueprint_repo_context.monitoring_enabled | default(true) | bool %}
+  - monitoring
+{% endif %}
   - sops

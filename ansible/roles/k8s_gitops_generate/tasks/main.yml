@@ -29,6 +29,9 @@
           - 'FluxCD repo:      {{ global_talos_cluster.fluxcd.git_repo | default("(not set)") }}'
           - 'Traefik:          {{ global_talos_cluster.traefik.enabled | default(true) | ternary("enabled", "disabled") }}'
           - 'Ingress domain:   {{ (global_talos_cluster.traefik.domain | default(global_domain, true)) }}'
+          - 'Monitoring stack: {{ global_talos_cluster.monitoring.enabled | default(true) | ternary("enabled", "disabled") }}'
+          - 'Monitoring domain: {{ (global_talos_cluster.monitoring.domain | default(global_talos_cluster.traefik.domain | default(global_domain), true)) }}'
+          - 'StorageClass:     {{ global_talos_cluster.monitoring.storage_class | default("longhorn") }}'
           - 'Cloudflare DNS01: {{ global_talos_cluster.traefik.cloudflare.enabled | default(false) | ternary("enabled", "disabled") }}'
           - '================================================'
       run_once: true
@@ -70,6 +73,29 @@
           traefik_cloudflare_api_token_secret_name: '{{ global_talos_cluster.traefik.cloudflare.api_token_secret_name | default("cloudflare-api-token") }}'
           traefik_cloudflare_api_token_secret_key: '{{ global_talos_cluster.traefik.cloudflare.api_token_secret_key | default("api-token") }}'
           traefik_cloudflare_api_token: '{{ vault_secrets.cloudflare.api_token | default("") }}'
+          monitoring_enabled: '{{ global_talos_cluster.monitoring.enabled | default(true) }}'
+          monitoring_namespace: '{{ global_talos_cluster.monitoring.namespace | default("monitoring") }}'
+          monitoring_storage_class: '{{ global_talos_cluster.monitoring.storage_class | default("longhorn") }}'
+          monitoring_domain: '{{ global_talos_cluster.monitoring.domain | default(global_talos_cluster.traefik.domain | default(global_domain), true) }}'
+          monitoring_grafana_subdomain: '{{ global_talos_cluster.monitoring.grafana_subdomain | default("grafana") }}'
+          monitoring_loki_subdomain: '{{ global_talos_cluster.monitoring.loki_subdomain | default("loki") }}'
+          monitoring_prometheus_storage_size: '{{ global_talos_cluster.monitoring.prometheus_storage_size | default("50Gi") }}'
+          monitoring_alertmanager_storage_size: '{{ global_talos_cluster.monitoring.alertmanager_storage_size | default("10Gi") }}'
+          monitoring_grafana_storage_size: '{{ global_talos_cluster.monitoring.grafana_storage_size | default("10Gi") }}'
+          monitoring_loki_storage_size: '{{ global_talos_cluster.monitoring.loki_storage_size | default("50Gi") }}'
+          monitoring_ingress_class_name: '{{ global_talos_cluster.monitoring.ingress_class_name | default("traefik") }}'
+          monitoring_tls_issuer: >-
+            {{
+              (global_talos_cluster.monitoring.tls_issuer | default('', true))
+              if (global_talos_cluster.monitoring.tls_issuer | default('', true) | length > 0)
+              else (
+                (global_talos_cluster.traefik.cloudflare.enabled | default(false) | bool)
+                | ternary(
+                    global_talos_cluster.traefik.cloudflare.issuer_name | default('letsencrypt-cloudflare'),
+                    'selfsigned-issuer'
+                  )
+              )
+            }}
           sops_age_public_key: '{{ global_sops_age_public_key | default("") }}'
         blueprint_git_init: true
         blueprint_git_commit: true
@@ -88,6 +114,7 @@
           - 'Infrastructure controllers:'
           - '  - Cilium (CNI)'
           - '  - cert-manager'
+          - '  - kube-prometheus-stack + Loki ({{ global_talos_cluster.monitoring.enabled | default(true) | ternary("enabled", "disabled") }}, storageClass={{ global_talos_cluster.monitoring.storage_class | default("longhorn") }})'
           - '  - Traefik (Ingress: {{ global_talos_cluster.traefik.enabled | default(true) | ternary("enabled", "disabled") }}, domain={{ global_talos_cluster.traefik.domain | default(global_domain, true) }})'
           - '  - SOPS secrets operator'
           - ''
