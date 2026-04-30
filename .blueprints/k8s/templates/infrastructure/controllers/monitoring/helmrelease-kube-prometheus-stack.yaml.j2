@@ -28,6 +28,14 @@ spec:
         type: pvc
         storageClassName: {{ blueprint_repo_context.monitoring_storage_class | default('longhorn') }}
         size: {{ blueprint_repo_context.monitoring_grafana_storage_size | default('10Gi') }}
+{% if blueprint_repo_context.monitoring_glances_dashboard_enabled | default(true) | bool %}
+      dashboards:
+        default:
+          glances:
+            gnetId: {{ blueprint_repo_context.monitoring_glances_dashboard_gnet_id | default(2387) }}
+            revision: {{ blueprint_repo_context.monitoring_glances_dashboard_revision | default(1) }}
+            datasource: {{ blueprint_repo_context.monitoring_glances_dashboard_datasource | default('InfluxDB') | quote }}
+{% endif %}
       ingress:
         enabled: true
         ingressClassName: {{ blueprint_repo_context.monitoring_ingress_class_name | default('traefik') }}

@@ -1,0 +1,7 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ blueprint_repo_context.proxmox_csi_namespace | default('csi-proxmox') }}
+  labels:
+    pod-security.kubernetes.io/enforce: privileged

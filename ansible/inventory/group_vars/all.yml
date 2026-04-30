@@ -386,6 +386,32 @@ global_talos_cluster:
     alertmanager_storage_size: '10Gi'
     grafana_storage_size: '10Gi'
     loki_storage_size: '50Gi'
+    glances_dashboard:
+      enabled: true
+      gnet_id: 2387
+      revision: 1
+      datasource: 'InfluxDB'
+
+  # Proxmox CSI storage driver (optional)
+  proxmox_csi:
+    enabled: false
+    namespace: 'csi-proxmox'
+    helm_repository_url: 'https://sergelogvinov.github.io/charts'
+    chart_version: '0.5.x'
+    release_name: 'proxmox-csi-plugin'
+    manage_config_secret: true
+    config_secret_name: 'proxmox-csi-config'
+    config_secret_key: 'config.yaml'
+    api_url: 'https://pve.example.com:8006/api2/json'
+    insecure: false
+    token_id: 'kubernetes-csi@pve!csi'
+    region: '{{ global_talos_cluster.cluster_name | default(project_name) }}'
+    storage_classes:
+      - name: 'proxmox-data'
+        storage: 'data'
+        reclaim_policy: 'Delete'
+        fstype: 'ext4'
+        cache: 'writethrough'
 
   # Artifact storage
   artifacts:

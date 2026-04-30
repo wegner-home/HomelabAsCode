@@ -1,0 +1,9 @@
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: proxmox-csi-plugin
+  namespace: {{ blueprint_repo_context.proxmox_csi_namespace | default('csi-proxmox') }}
+spec:
+  interval: 24h
+  url: {{ blueprint_repo_context.proxmox_csi_helm_repository_url | default('https://sergelogvinov.github.io/charts') }}

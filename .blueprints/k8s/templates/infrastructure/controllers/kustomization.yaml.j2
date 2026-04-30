@@ -10,4 +10,7 @@ resources:
 {% if blueprint_repo_context.monitoring_enabled | default(true) | bool %}
   - monitoring
 {% endif %}
+{% if blueprint_repo_context.proxmox_csi_enabled | default(false) | bool %}
+  - proxmox-csi
+{% endif %}
   - sops

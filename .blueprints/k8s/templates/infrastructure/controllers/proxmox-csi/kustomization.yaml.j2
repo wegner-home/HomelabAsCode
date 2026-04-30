@@ -1,0 +1,8 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: {{ blueprint_repo_context.proxmox_csi_namespace | default('csi-proxmox') }}
+resources:
+  - namespace.yaml
+  - helmrepository.yaml
+  - helmrelease.yaml

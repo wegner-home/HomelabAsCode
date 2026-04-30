@@ -38,6 +38,23 @@ context:
   monitoring_loki_storage_size: "{{ global_talos_cluster.monitoring.loki_storage_size | default('50Gi') }}"
   monitoring_ingress_class_name: "{{ global_talos_cluster.monitoring.ingress_class_name | default('traefik') }}"
   monitoring_tls_issuer: "{{ (global_talos_cluster.monitoring.tls_issuer | default('')) if (global_talos_cluster.monitoring.tls_issuer | default('') | length > 0) else ((global_talos_cluster.traefik.cloudflare.enabled | default(false)) | ternary(global_talos_cluster.traefik.cloudflare.issuer_name | default('letsencrypt-cloudflare'), 'selfsigned-issuer')) }}"
+  monitoring_glances_dashboard_enabled: '{{ global_talos_cluster.monitoring.glances_dashboard.enabled | default(true) }}'
+  monitoring_glances_dashboard_gnet_id: '{{ global_talos_cluster.monitoring.glances_dashboard.gnet_id | default(2387) }}'
+  monitoring_glances_dashboard_revision: '{{ global_talos_cluster.monitoring.glances_dashboard.revision | default(1) }}'
+  monitoring_glances_dashboard_datasource: "{{ global_talos_cluster.monitoring.glances_dashboard.datasource | default('InfluxDB') }}"
+  proxmox_csi_enabled: '{{ global_talos_cluster.proxmox_csi.enabled | default(false) }}'
+  proxmox_csi_namespace: "{{ global_talos_cluster.proxmox_csi.namespace | default('csi-proxmox') }}"
+  proxmox_csi_helm_repository_url: "{{ global_talos_cluster.proxmox_csi.helm_repository_url | default('https://sergelogvinov.github.io/charts') }}"
+  proxmox_csi_chart_version: "{{ global_talos_cluster.proxmox_csi.chart_version | default('0.5.x') }}"
+  proxmox_csi_release_name: "{{ global_talos_cluster.proxmox_csi.release_name | default('proxmox-csi-plugin') }}"
+  proxmox_csi_manage_config_secret: '{{ global_talos_cluster.proxmox_csi.manage_config_secret | default(true) }}'
+  proxmox_csi_config_secret_name: "{{ global_talos_cluster.proxmox_csi.config_secret_name | default('proxmox-csi-config') }}"
+  proxmox_csi_config_secret_key: "{{ global_talos_cluster.proxmox_csi.config_secret_key | default('config.yaml') }}"
+  proxmox_csi_api_url: "{{ global_talos_cluster.proxmox_csi.api_url | default('') }}"
+  proxmox_csi_insecure: '{{ global_talos_cluster.proxmox_csi.insecure | default(false) }}'
+  proxmox_csi_token_id: "{{ global_talos_cluster.proxmox_csi.token_id | default('') }}"
+  proxmox_csi_region: '{{ global_talos_cluster.proxmox_csi.region | default(global_talos_cluster.cluster_name | default(project_name)) }}'
+  proxmox_csi_storage_classes_json: '{{ global_talos_cluster.proxmox_csi.storage_classes | default([]) | to_json }}'
   sops_age_public_key: "{{ global_sops_age_public_key | default('') }}"
 
 # Directories to create

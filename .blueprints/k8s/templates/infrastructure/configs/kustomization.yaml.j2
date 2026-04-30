@@ -9,3 +9,6 @@ resources:
 {% if blueprint_repo_context.traefik_cloudflare_enabled | default(false) | bool %}
   - cloudflare-token-secret.sops.yaml
 {% endif %}
+{% if (blueprint_repo_context.proxmox_csi_enabled | default(false) | bool) and (blueprint_repo_context.proxmox_csi_manage_config_secret | default(true) | bool) %}
+  - proxmox-csi-config-secret.sops.yaml
+{% endif %}

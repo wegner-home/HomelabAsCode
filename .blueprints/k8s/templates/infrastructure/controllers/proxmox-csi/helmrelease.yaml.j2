@@ -1,0 +1,40 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+	name: {{ blueprint_repo_context.proxmox_csi_release_name | default('proxmox-csi-plugin') }}
+	namespace: {{ blueprint_repo_context.proxmox_csi_namespace | default('csi-proxmox') }}
+spec:
+	interval: 30m
+	chart:
+		spec:
+			chart: proxmox-csi-plugin
+			version: {{ blueprint_repo_context.proxmox_csi_chart_version | default('0.5.x') | quote }}
+			sourceRef:
+				kind: HelmRepository
+				name: proxmox-csi-plugin
+				namespace: {{ blueprint_repo_context.proxmox_csi_namespace | default('csi-proxmox') }}
+			interval: 12h
+	install:
+		remediation:
+			retries: 3
+	upgrade:
+		remediation:
+			retries: 3
+	values:
+		existingConfigSecret: {{ blueprint_repo_context.proxmox_csi_config_secret_name | default('proxmox-csi-config') | quote }}
+		existingConfigSecretKey: {{ blueprint_repo_context.proxmox_csi_config_secret_key | default('config.yaml') | quote }}
+{% set proxmox_storage_classes = blueprint_repo_context.proxmox_csi_storage_classes_json | default('[]') | from_json %}
+{% if proxmox_storage_classes | length > 0 %}
+		storageClass:
+{% for sc in proxmox_storage_classes %}
+			- name: {{ sc.name | default('proxmox-data') | quote }}
+				storage: {{ sc.storage | default('data') | quote }}
+				reclaimPolicy: {{ sc.reclaim_policy | default('Delete') | quote }}
+				fstype: {{ sc.fstype | default('ext4') | quote }}
+{% if sc.cache is defined %}
+				cache: {{ sc.cache | quote }}
+{% endif %}
+{% endfor %}
+{% endif %}
+
